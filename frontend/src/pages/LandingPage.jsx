@@ -47,6 +47,70 @@ function Stagger({ children, className = '', gap = 0.1 }) {
   );
 }
 
+/* ──────────────────────── People Bubble ──────────────────────── */
+
+function PeopleBubble({ img, quotes, side, position, delay = 0 }) {
+  const [idx, setIdx] = useState(0);
+  const [phase, setPhase] = useState('wait'); // wait | typing | pause | fadeout
+  const textRef = useRef(null);
+  const [fullWidth, setFullWidth] = useState(0);
+
+  useEffect(() => {
+    const t = setTimeout(() => setPhase('typing'), delay);
+    return () => clearTimeout(t);
+  }, [delay]);
+
+  useEffect(() => {
+    if (phase === 'typing') {
+      // measure full width
+      if (textRef.current) {
+        textRef.current.style.maxWidth = 'none';
+        setFullWidth(textRef.current.scrollWidth);
+        textRef.current.style.maxWidth = '0px';
+        requestAnimationFrame(() => {
+          if (textRef.current) textRef.current.style.maxWidth = fullWidth + 20 + 'px';
+        });
+      }
+      const t = setTimeout(() => setPhase('pause'), 1500);
+      return () => clearTimeout(t);
+    } else if (phase === 'pause') {
+      const wait = 1500 + Math.random() * 1500;
+      const t = setTimeout(() => setPhase('fadeout'), wait);
+      return () => clearTimeout(t);
+    } else if (phase === 'fadeout') {
+      const t = setTimeout(() => {
+        setIdx(prev => (prev + 1) % quotes.length);
+        setPhase('typing');
+      }, 400);
+      return () => clearTimeout(t);
+    }
+  }, [phase, idx, quotes, fullWidth]);
+
+  const display = quotes[idx];
+
+  return (
+    <div className="relative flex-1">
+      <img src={img} alt="" className="w-full h-full object-cover rounded-2xl shadow-lg shadow-indigo-100/30" />
+      <div className={`absolute z-50 ${position === 'center' ? 'top-1/2 -translate-y-1/2' : 'bottom-4'} ${side === 'right' ? 'left-[60%]' : 'right-[60%]'}`}>
+        <div className="relative bg-white rounded-2xl px-3 py-2 shadow-md border border-gray-100 whitespace-nowrap">
+          <p ref={textRef} className="text-[10px] text-[#5A5D8D] leading-snug overflow-hidden transition-all duration-[1.2s] ease-out"
+            style={{ maxWidth: phase === 'wait' ? 0 : phase === 'fadeout' ? 0 : undefined, opacity: phase === 'fadeout' || phase === 'wait' ? 0 : 1, transition: 'max-width 1.2s ease-out, opacity 0.3s ease' }}>
+            {display}
+          </p>
+          {/* Speech tail */}
+          <svg className={`absolute top-1/2 -translate-y-1/2 ${side === 'right' ? 'right-full' : 'left-full'}`} width="8" height="12" viewBox="0 0 8 12" fill="none">
+            {side === 'right' ? (
+              <><path d="M8 0 L0 6 L8 12" fill="white" /><path d="M8 0 L0 6 L8 12" stroke="#e5e7eb" strokeWidth="1" fill="none" /><path d="M8 0.5 L8 11.5" stroke="white" strokeWidth="2" /></>
+            ) : (
+              <><path d="M0 0 L8 6 L0 12" fill="white" /><path d="M0 0 L8 6 L0 12" stroke="#e5e7eb" strokeWidth="1" fill="none" /><path d="M0 0.5 L0 11.5" stroke="white" strokeWidth="2" /></>
+            )}
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ──────────────────────── Colors (tldv palette) ──────────────────────── */
 // Navy heading: #0F0F3D   Accent: #4338CA (indigo-700)   Body text: #5A5D8D   Accent light: #8585FF
 
@@ -71,11 +135,8 @@ function Navbar() {
   return (
     <nav className={`fixed top-0 w-full z-50 transition-all duration-300 ${scrolled ? 'bg-white/90 backdrop-blur-xl shadow-sm' : ''}`}>
       <div className="max-w-[1200px] mx-auto px-6 h-16 flex items-center justify-between">
-        <a href="#" className="flex items-center gap-2.5 group">
-          <div className="w-8 h-8 rounded-lg bg-[#4338CA] flex items-center justify-center group-hover:scale-110 transition-transform">
-            <Mic className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-xl font-bold text-[#0F0F3D]">Cappa<span className="text-[#4338CA]">.ai</span></span>
+        <a href="#" className="flex items-center group">
+          <img src="/logo.png" alt="Voizely" className="h-8 group-hover:scale-105 transition-transform" />
         </a>
         <div className="hidden md:flex items-center gap-8">
           {NAV.map(l => (
@@ -126,21 +187,15 @@ function Hero() {
 
       <div className="max-w-[1200px] mx-auto px-6 text-center">
         <h1 className="text-5xl md:text-[64px] font-bold text-[#0F0F3D] leading-[1.15] tracking-tight mb-6" style={anim(0.2)}>
-          AI ถอดเสียงประชุม <span className="text-[#4338CA]">ภาษาไทย</span><br />
-          ที่องค์กรไว้วางใจ
+          AI ถอดเสียงและสรุปการประชุม<br />
+          <span className="text-[#4338CA]">ที่องค์กรไว้วางใจ</span>
         </h1>
 
         <p className="text-lg text-[#5A5D8D] max-w-2xl mx-auto mb-10 leading-relaxed" style={anim(0.4)}>
-          ถอดเสียง แยกผู้พูด สรุป MoM อัตโนมัติ — ครบจบในไฟล์เดียว
-          ทุกอย่างที่คุณคาดหวังจาก AI Meeting Intelligence ระดับสากล
+          เชื่อมต่อทุกแพลตฟอร์มประชุม ถอดเสียง แยกผู้พูด สรุป MoM
+          และร่างเอกสารให้อัตโนมัติ — ทุกอย่างครบจบในที่เดียว
         </p>
 
-        <div style={anim(0.6)}>
-          <a href="#contact" className="group inline-flex items-center gap-2 px-8 py-4 text-base font-semibold text-white bg-[#4338CA] rounded-full hover:bg-[#3730A3] hover:shadow-xl hover:shadow-indigo-200/50 hover:-translate-y-1 transition-all duration-300">
-            เริ่มต้นใช้งาน — ฟรี
-            <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-          </a>
-        </div>
 
         {/* Trust badges row */}
         <div className="flex flex-wrap items-center justify-center gap-6 md:gap-8 mt-12" style={anim(0.8)}>
@@ -151,15 +206,27 @@ function Hero() {
             <span className="text-sm text-[#5A5D8D] ml-1 font-medium">4.9/5</span>
           </div>
           <div className="h-4 w-px bg-[#B0AED0]" />
-          <span className="text-sm text-[#5A5D8D]">ความแม่นยำ MoM <span className="font-bold text-[#0F0F3D]">99%</span></span>
+          <span className="text-sm text-[#5A5D8D]">รองรับ <span className="font-bold text-[#0F0F3D]">100+</span> ภาษา</span>
           <div className="h-4 w-px bg-[#B0AED0]" />
-          <span className="text-sm text-[#5A5D8D]">NO BOT REQUIRED</span>
+          <span className="text-sm text-[#5A5D8D]">รองรับภาษาถิ่น <span className="font-bold text-[#0F0F3D]">เหนือ</span> <span className="font-bold text-[#0F0F3D]">อีสาน</span> <span className="font-bold text-[#0F0F3D]">ใต้</span></span>
         </div>
 
-        {/* Product mockup — grid: app 2/3 + outputs 1/3 */}
-        <div className="mt-16 max-w-6xl mx-auto flex items-center gap-6 text-left" style={{ opacity: loaded ? 1 : 0, transform: loaded ? 'translateY(0)' : 'translateY(60px)', transition: 'all 1.2s cubic-bezier(.16,1,.3,1) 1s' }}>
+        {/* Product mockup — people + app */}
+        <div className="mt-16 max-w-6xl mx-auto flex items-stretch gap-6 text-left" style={{ opacity: loaded ? 1 : 0, transform: loaded ? 'translateY(0)' : 'translateY(60px)', transition: 'all 1.2s cubic-bezier(.16,1,.3,1) 1s' }}>
+
+          {/* People column — stretch to match app height */}
+          <div className="hidden lg:flex flex-col gap-3 shrink-0 w-[160px]">
+            {[
+              { img: '/people1.png', quotes: ['สวัสดีค่ะ', 'วันนี้ขอเสนอ', 'ขอบคุณมากค่ะ'], side: 'right' },
+              { img: '/people2.png', quotes: ['สบายดีเจ้า', 'มื้อนี้สิมาเว่า', 'แหลงเข้าใจหม้าย'], side: 'left' },
+              { img: '/people3.png', quotes: ['Nice to meet you!', 'Let me explain...', 'Sounds good!'], side: 'right' },
+            ].map((p, i) => (
+              <PeopleBubble key={i} img={p.img} quotes={p.quotes} side={p.side} position={i === 0 ? 'center' : 'bottom'} delay={[0, 2500, 1200][i]} />
+            ))}
+          </div>
+
           {/* Main app window */}
-          <div className="rounded-2xl border border-white/60 bg-white/95 backdrop-blur-sm shadow-2xl shadow-indigo-200/40 overflow-hidden">
+          <div className="flex-1 rounded-2xl border border-white/60 bg-white/95 backdrop-blur-sm shadow-2xl shadow-indigo-200/40 overflow-hidden flex flex-col">
             {/* Title bar */}
             <div className="flex items-center gap-2 px-4 py-2.5 bg-[#F8F7FF] border-b border-gray-100/80">
               <div className="flex gap-1.5">
@@ -178,8 +245,7 @@ function Hero() {
               {/* Sidebar */}
               <div className="hidden md:block w-56 border-r border-gray-100 bg-[#FAFAFF] p-3 shrink-0">
                 <div className="flex items-center gap-2 px-2 mb-3">
-                  <div className="w-5 h-5 rounded bg-[#4338CA] flex items-center justify-center"><Mic className="w-3 h-3 text-white" /></div>
-                  <span className="text-xs font-bold text-[#0F0F3D]">Voizely.ai</span>
+                  <img src="/logo.png" alt="Voizely" className="h-5" />
                 </div>
                 <div className="space-y-0.5">
                   {[
@@ -207,150 +273,93 @@ function Hero() {
                 <div className="px-5 py-3 border-b border-gray-50 flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-bold text-[#0F0F3D]">ประชุมงบประมาณ Q2</h3>
-                    <span className="text-[10px] text-[#B0AED0]">28 มี.ค. 2569 &middot; 45 นาที &middot; 3 ผู้พูด</span>
+                    <span className="text-[10px] text-[#B0AED0]">28 มี.ค. 2569 &middot; 45 นาที &middot; ผู้พูด 3 คน</span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-semibold flex items-center gap-1">
-                      <Check className="w-3 h-3" /> เสร็จสิ้น
-                    </span>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-[#4338CA] text-[10px] font-medium">ประชุมภายใน</span>
+                    <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 text-[10px] font-medium">เป็นทางการ</span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-medium">เชิงบวก</span>
                   </div>
                 </div>
 
-                {/* Tabs */}
-                <div className="px-5 border-b border-gray-50 flex gap-4">
-                  {['ถอดเสียง', 'สรุป MoM', 'Speaker'].map((tab, i) => (
-                    <button key={tab} className={`py-2 text-xs font-medium border-b-2 ${i === 0 ? 'text-[#4338CA] border-[#4338CA]' : 'text-[#B0AED0] border-transparent'}`}>{tab}</button>
-                  ))}
-                </div>
-
-                {/* Transcript with speaker colors */}
-                <div className="p-5 space-y-0.5">
-                  {[
-                    { init: 'ก', name: 'กมล วิชาญ', time: '00:01:23', text: 'สำหรับ action items ที่ต้องทำก่อนประชุมครั้งหน้า ผมขอสรุปสั้นๆ นะครับ', color: '#4338CA' },
-                    { init: 'ส', name: 'สมชาย ใจดี', time: '00:01:45', text: 'ผมจะจัดทำรายงานสรุปงบประมาณให้เสร็จภายในวันศุกร์ครับ', color: '#059669' },
-                    { init: 'น', name: 'นภา รัตนกุล', time: '00:02:10', text: 'เรื่องงบประมาณ ทางฝ่ายบัญชีจะส่งรายละเอียดให้ภายในสัปดาห์นี้ค่ะ', color: '#7C3AED' },
-                    { init: 'ก', name: 'กมล วิชาญ', time: '00:02:35', text: 'ดีครับ งั้นมติที่ประชุม — อนุมัติแผนงานไตรมาส 2 ด้วยมติเอกฉันท์', color: '#4338CA' },
-                  ].map((l, i) => (
-                    <div key={i} className="flex items-start gap-3 py-2 px-2 rounded-lg hover:bg-indigo-50/30 transition-colors">
-                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5" style={{ backgroundColor: l.color + '18', color: l.color }}>{l.init}</div>
-                      <div className="min-w-0">
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-xs font-semibold text-[#0F0F3D]">{l.name}</span>
-                          <span className="text-[10px] text-[#B0AED0]">{l.time}</span>
-                        </div>
-                        <p className="text-[13px] text-[#5A5D8D] leading-relaxed">{l.text}</p>
-                      </div>
+                {/* Audio bar */}
+                <div className="px-5 py-2.5 border-b border-gray-50">
+                  <div className="flex items-center gap-3">
+                    <svg viewBox="0 0 16 16" className="w-3 h-3 text-[#B0AED0] fill-[#B0AED0] shrink-0"><polygon points="4,2 14,8 4,14" /></svg>
+                    <div className="flex-1 h-1 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-[#4338CA] rounded-full" style={{ width: '28%' }} />
                     </div>
-                  ))}
+                    <span className="text-[10px] text-[#B0AED0] shrink-0 font-mono">12:35 / 45:00</span>
+                  </div>
+                </div>
+
+                <div className="flex">
+                  {/* Timeline content */}
+                  <div className="flex-1 p-5 space-y-0.5">
+                    {[
+                      { name: 'นภา รัตนกุล', time: '0:01', text: 'สวัสดีค่ะ วันนี้เรามาคุยเรื่องงบประมาณไตรมาส 2 กันนะคะ', color: '#E11D48' },
+                      { name: 'แดเนียล จอห์นสัน', time: '0:28', text: 'ครับ ผมเตรียมตัวเลขมาแล้ว รวมอยู่ที่ประมาณ 2.4 ล้านบาท', color: '#2563EB' },
+                      { name: 'พิมพ์ใจ สุวรรณ', time: '1:05', text: 'ทางฝ่ายบัญชีดูแล้ว ตัวเลขนี้สอดคล้องกับแผนที่วางไว้ค่ะ', color: '#059669' },
+                      { name: 'นภา รัตนกุล', time: '1:32', text: 'ดีค่ะ งั้นขอสรุป action items ก่อนนะคะ', color: '#E11D48' },
+                      { name: 'แดเนียล จอห์นสัน', time: '2:10', text: 'ผมจะจัดทำรายงานสรุปงบประมาณให้เสร็จภายในวันศุกร์ครับ', color: '#2563EB' },
+                      { name: 'พิมพ์ใจ สุวรรณ', time: '2:35', text: 'ค่ะ ทางบัญชีจะส่งรายละเอียดค่าใช้จ่ายให้ภายในสัปดาห์นี้', color: '#059669' },
+                    ].map((l, i) => (
+                      <div key={i} className="flex gap-3 py-2 px-2 rounded-md hover:bg-indigo-50/30 transition-colors">
+                        <div className="text-[10px] text-[#B0AED0] w-8 shrink-0 pt-1 font-mono">{l.time}</div>
+                        <div className="w-1 shrink-0 rounded-full" style={{ background: l.color }} />
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-semibold mb-0.5" style={{ color: l.color }}>{l.name}</div>
+                          <p className="text-[13px] text-[#5A5D8D] leading-relaxed">{l.text}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Right panel */}
+                  <div className="hidden md:block w-44 border-l border-gray-100 p-4 shrink-0">
+                    {/* Action buttons */}
+                    <div className="text-[11px] font-semibold text-[#0F0F3D] mb-2">ดำเนินการ</div>
+                    <div className="space-y-1.5 mb-4">
+                      {[
+                        { icon: '📋', label: 'MoM' },
+                        { icon: '📄', label: 'ร่างเอกสาร' },
+                        { icon: '✉️', label: 'ส่งอีเมล' },
+                        { icon: '✨', label: 'AI สรุป' },
+                      ].map((a, i) => (
+                        <div key={i} className="flex items-center gap-2 py-1.5 px-2.5 rounded-lg bg-[#F8F7FF] border border-indigo-50 hover:border-[#4338CA]/30 transition-colors cursor-pointer">
+                          <span className="text-sm">{a.icon}</span>
+                          <span className="text-[10px] font-medium text-[#5A5D8D]">{a.label}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="text-[11px] font-semibold text-[#0F0F3D] mb-3">ผู้พูด</div>
+                    <div className="space-y-3">
+                      {[
+                        { name: 'นภา', pct: 40, color: '#E11D48' },
+                        { name: 'แดเนียล', pct: 35, color: '#2563EB' },
+                        { name: 'พิมพ์ใจ', pct: 25, color: '#059669' },
+                      ].map((s, i) => (
+                        <div key={i}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-medium text-[#5A5D8D]">{s.name}</span>
+                            <span className="text-[10px] text-[#B0AED0]">{s.pct}%</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${s.pct}%`, background: s.color }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+
+                  </div>
                 </div>
 
               </div>
             </div>
           </div>
 
-          {/* Curved arrow */}
-          <div className="hidden lg:flex items-center shrink-0 self-center mx-2">
-            <svg width="64" height="80" viewBox="0 0 64 80" fill="none">
-              <path d="M4 10 C 20 10, 30 40, 50 40" stroke="#4338CA" strokeWidth="2.5" strokeDasharray="5 4" fill="none" strokeLinecap="round" />
-              <path d="M45 33L55 40L45 47" fill="#4338CA" />
-            </svg>
-          </div>
-
-          {/* Fanned output documents */}
-          <div className="hidden lg:block shrink-0 relative" style={{ width: 420, height: 520 }}>
-
-            {/* Card 1 (back-left) — MoM Report */}
-            <div className="absolute top-0 left-0 w-[220px] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden rotate-[-10deg] origin-bottom-right hover:rotate-[-5deg] hover:scale-[1.04] hover:z-40 transition-all duration-300 z-10" style={{ boxShadow: '4px 4px 20px rgba(67,56,202,0.12)' }}>
-              <div className="px-4 py-5 text-center border-b border-gray-100">
-                <div className="text-[11px] font-bold text-[#0F0F3D] tracking-wide">รายงานสรุปการประชุม</div>
-              </div>
-              <div className="p-4 text-[10px] text-[#5A5D8D] space-y-2">
-                <table className="w-full text-[10px]">
-                  <tbody>
-                    <tr><td className="font-bold text-[#0F0F3D] pr-2 align-top py-0.5">เรื่อง</td><td>งบประมาณ Acceptance Test</td></tr>
-                    <tr><td className="font-bold text-[#0F0F3D] pr-2 align-top py-0.5">วันที่</td><td>28/03/2569</td></tr>
-                    <tr><td className="font-bold text-[#0F0F3D] pr-2 align-top py-0.5">สถานที่</td><td>ห้อง 401 ชั้น 4</td></tr>
-                  </tbody>
-                </table>
-                <div className="border-t border-gray-100 pt-2">
-                  <div className="font-bold text-[#0F0F3D] mb-1">ผู้เข้าร่วมประชุม</div>
-                  <ul className="list-disc pl-3 space-y-0.5">
-                    <li>Speaker 1</li><li>Speaker 2</li><li>Speaker 3</li>
-                  </ul>
-                </div>
-                <div className="border-t border-gray-100 pt-2">
-                  <div className="font-bold text-[#4338CA] mb-1">สรุปสาระสำคัญ</div>
-                  <div className="leading-relaxed">ที่ประชุมมีมติเห็นชอบให้ดำเนินการตามแผนงานที่เสนอ...</div>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 2 (center-bottom) — ฟอร์มราชการ + ตราครุฑ */}
-            <div className="absolute top-[200px] left-[60px] w-[230px] bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden rotate-[2deg] origin-bottom-left hover:rotate-[0deg] hover:scale-[1.04] hover:z-40 transition-all duration-300 z-20" style={{ boxShadow: '4px 4px 20px rgba(67,56,202,0.15)' }}>
-              <div className="p-4">
-                {/* Garuda + Header */}
-                <div className="flex items-start gap-3 mb-3">
-                  <img src="/garuda.png" alt="ตราครุฑ" className="w-12 h-12 object-contain opacity-80" />
-                  <div className="text-[10px] text-[#5A5D8D] flex-1">
-                    <div className="font-bold text-[#0F0F3D]">บันทึกข้อความ</div>
-                    <div><b>ส่วนราชการ</b> กองคลัง กรมบัญชีกลาง</div>
-                    <div><b>ที่</b> กค 0423/ว.247 <b>วันที่</b> 28 มี.ค. 2569</div>
-                  </div>
-                </div>
-                <div className="text-[10px] text-[#5A5D8D] space-y-1.5">
-                  <div><b className="text-[#0F0F3D]">เรื่อง</b> ขออนุมัติแผนงานไตรมาส 2</div>
-                  <div><b className="text-[#0F0F3D]">เรียน</b> ผู้อำนวยการกองคลัง</div>
-                  <div className="border-t border-gray-100 pt-1.5 leading-relaxed">
-                    ตามมติที่ประชุมเมื่อวันที่ 28 มีนาคม 2569 ที่ประชุมมีมติเห็นชอบอนุมัติแผนงานไตรมาส 2 โดยมอบหมายให้ผู้รับผิดชอบดำเนินการ...
-                  </div>
-                  <div className="pt-2 text-right">
-                    <div className="text-[9px] text-[#B0AED0]">ลงชื่อ .........................</div>
-                    <div className="text-[9px] text-[#0F0F3D] font-medium mt-0.5">( กมล วิชาญ )</div>
-                    <div className="text-[9px] text-[#B0AED0]">ประธานที่ประชุม</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Card 3 (top-right) — AI Chatbot */}
-            <div className="absolute top-[10px] right-0 w-[200px] bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden rotate-[7deg] origin-bottom-left hover:rotate-[3deg] hover:scale-[1.04] hover:z-40 transition-all duration-300 z-30" style={{ boxShadow: '4px 4px 20px rgba(67,56,202,0.12)' }}>
-              <div className="bg-[#4338CA] px-4 py-2.5 flex items-center gap-2">
-                <MessageSquareQuote className="w-4 h-4 text-white" />
-                <span className="text-xs font-bold text-white">Chat</span>
-                <span className="text-[10px] text-indigo-200 ml-auto">Cappa AI</span>
-              </div>
-              <div className="p-3 space-y-2 bg-gray-50/50">
-                {/* User */}
-                <div className="flex justify-end">
-                  <div className="bg-[#4338CA] rounded-2xl rounded-br-sm px-3 py-2 text-[11px] text-white max-w-[85%]">ประชุมวันนี้สรุปอะไรบ้าง?</div>
-                </div>
-                {/* Bot */}
-                <div className="flex gap-2">
-                  <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center shrink-0 mt-0.5"><BrainCircuit className="w-3.5 h-3.5 text-[#4338CA]" /></div>
-                  <div className="bg-white rounded-2xl rounded-bl-sm px-3 py-2 text-[11px] text-[#5A5D8D] border border-gray-100 max-w-[85%]">มติ: อนุมัติแผน Q2 เป็นเอกฉันท์ สมชายรับจัดทำรายงานภายในศุกร์นี้ค่ะ</div>
-                </div>
-                {/* User */}
-                <div className="flex justify-end">
-                  <div className="bg-[#4338CA] rounded-2xl rounded-br-sm px-3 py-2 text-[11px] text-white max-w-[85%]">ใครต้องติดตาม?</div>
-                </div>
-                {/* Bot typing */}
-                <div className="flex gap-2">
-                  <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center shrink-0 mt-0.5"><BrainCircuit className="w-3.5 h-3.5 text-[#4338CA]" /></div>
-                  <div className="bg-white rounded-2xl rounded-bl-sm px-3 py-2 text-[11px] text-[#B0AED0] border border-gray-100 flex gap-1">
-                    <span className="animate-bounce" style={{ animationDelay: '0s' }}>.</span>
-                    <span className="animate-bounce" style={{ animationDelay: '0.15s' }}>.</span>
-                    <span className="animate-bounce" style={{ animationDelay: '0.3s' }}>.</span>
-                  </div>
-                </div>
-              </div>
-              {/* Input bar */}
-              <div className="px-3 py-2 border-t border-gray-100 flex items-center gap-2">
-                <div className="flex-1 px-3 py-1.5 bg-gray-50 rounded-full text-[10px] text-[#B0AED0]">พิมพ์ข้อความ...</div>
-                <div className="w-6 h-6 rounded-full bg-[#4338CA] flex items-center justify-center"><ArrowRight className="w-3 h-3 text-white" /></div>
-              </div>
-            </div>
-
-          </div>
         </div>
       </div>
     </section>
@@ -406,6 +415,13 @@ const FEATURES = [
     desc2: 'ไม่ต้องเสียเวลาเขียน MoM อีก 3 ชั่วโมงหลังประชุม — Voizely.ai ทำให้คุณใน 5 นาที ด้วยความแม่นยำ 99%',
     cta: 'ดูเพิ่มเติมเรื่อง MoM',
     visual: 'mom',
+  },
+  {
+    title: <>ไม่ได้แค่ถอดเสียง — <span className="text-[#4338CA]">ต่อยอดได้ทันที</span></>,
+    desc: 'จากผลการถอดเสียง สามารถจัดทำเอกสารทางการ ส่งอีเมลสรุปให้ผู้เข้าร่วมประชุม หรือถาม AI Chatbot เพื่อค้นหาข้อมูลจากทุกการประชุมที่ผ่านมา',
+    desc2: 'ทุกอย่างเชื่อมต่อกันอัตโนมัติ — ลดเวลาทำงานซ้ำๆ ให้คุณโฟกัสกับสิ่งที่สำคัญกว่า',
+    cta: 'ดูเพิ่มเติมเรื่องการดำเนินการ',
+    visual: 'actions',
   },
 ];
 
@@ -464,6 +480,26 @@ function FeatureVisual({ type }) {
         <div className="text-xs font-semibold text-[#4338CA]">Voiceprint Learning</div>
         <div className="text-[11px] text-[#5A5D8D] mt-0.5">จดจำเสียง auto-assign ครั้งถัดไป</div>
       </div>
+    </div>
+  );
+
+  if (type === 'actions') return (
+    <div className="rounded-2xl bg-white border border-gray-100 shadow-lg shadow-indigo-50/50 overflow-hidden p-5 space-y-4">
+      {[
+        { icon: '📄', title: 'จัดทำเอกสาร', desc: 'สร้างบันทึกข้อความ รายงานการประชุม หนังสือราชการ จาก MoM อัตโนมัติ', color: '#4338CA' },
+        { icon: '✉️', title: 'ส่งอีเมลสรุป', desc: 'ส่งสรุปประชุมพร้อม Action Items ให้ผู้เข้าร่วมทุกคนในคลิกเดียว', color: '#059669' },
+        { icon: '🤖', title: 'AI Chatbot', desc: 'ถามคำถามจากทุกการประชุม — "เมื่อวานใครรับผิดชอบเรื่องนี้?" AI ตอบได้ทันที', color: '#E11D48' },
+      ].map((a, i) => (
+        <div key={i} className="flex gap-4 p-3 rounded-xl bg-gray-50/80 border border-gray-100/50 hover:border-indigo-200 transition-colors">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0" style={{ backgroundColor: a.color + '12' }}>
+            {a.icon}
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-[#0F0F3D]">{a.title}</div>
+            <div className="text-xs text-[#5A5D8D] mt-0.5 leading-relaxed">{a.desc}</div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 
@@ -736,11 +772,8 @@ function Footer() {
   return (
     <footer className="py-10 bg-white border-t border-gray-100">
       <div className="max-w-[1200px] mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-6">
-        <a href="#" className="flex items-center gap-2 group">
-          <div className="w-7 h-7 rounded-lg bg-[#4338CA] flex items-center justify-center group-hover:scale-110 transition-transform">
-            <Mic className="w-3.5 h-3.5 text-white" />
-          </div>
-          <span className="text-base font-bold text-[#0F0F3D]">Cappa<span className="text-[#4338CA]">.ai</span></span>
+        <a href="#" className="flex items-center group">
+          <img src="/logo.png" alt="Voizely" className="h-6 group-hover:scale-105 transition-transform" />
         </a>
         <div className="flex items-center gap-6">
           {NAV.map(l => (
@@ -757,7 +790,7 @@ function Footer() {
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-white" style={{ fontFamily: "'Work Sans', 'Inter', system-ui, sans-serif" }}>
+    <div className="min-h-screen bg-white" style={{ fontFamily: "'Prompt', system-ui, sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap');
         @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-20px)} }

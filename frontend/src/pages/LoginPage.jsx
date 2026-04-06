@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mic, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { login, setToken, setUser } from '../lib/auth';
 
 export default function LoginPage() {
@@ -33,11 +33,8 @@ export default function LoginPage() {
       <div className="w-full max-w-md px-4">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-[#2563eb] rounded-2xl mb-4 shadow-lg shadow-blue-200">
-            <Mic className="w-8 h-8 text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-[#1f2937]">Voizely.ai</h1>
-          <p className="text-sm text-[#6b7280] mt-1">Speech-to-Text Platform</p>
+          <img src="/logo.png" alt="Voizely" className="h-12 mx-auto mb-3" />
+          <p className="text-sm text-[#6b7280]">Speech-to-Text Platform</p>
         </div>
 
         {/* Card */}

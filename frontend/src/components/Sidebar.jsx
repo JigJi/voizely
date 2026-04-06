@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { Upload, Plus, ChevronDown, Settings, Check, X, Loader2, Mic, Users, BookOpen, Trash2 } from 'lucide-react';
+import { Upload, Plus, ChevronDown, Settings, Check, X, Loader2, Users, BookOpen, Trash2 } from 'lucide-react';
 import { deleteTranscription } from '../api';
 import { getGroups, getTranscriptions, createGroup } from '../api';
 import Modal from './Modal';
@@ -81,8 +81,7 @@ export default function Sidebar() {
       {/* Header */}
       <div className="p-4 border-b border-[#e5e7eb]">
         <div className="flex items-center gap-2 mb-3">
-          <Mic className="w-5 h-5 text-[#2563eb]" />
-          <span className="font-semibold text-sm">Voizely.ai</span>
+          <img src="/logo.png" alt="Voizely" className="h-6" />
         </div>
         {/* New Transcription */}
         <button onClick={() => navigate('/upload')} className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-[#2563eb] hover:bg-[#1d4ed8] text-white rounded-lg text-sm font-medium transition-all shadow-sm hover:shadow-md">
