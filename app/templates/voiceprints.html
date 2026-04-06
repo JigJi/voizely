@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Voiceprint — SpeechText{% endblock %}
+{% block content %}
+<div style="max-width:900px;margin:0 auto;padding:24px;">
+    <h2 style="margin-bottom:8px;">Speaker Profiles</h2>
+    <p style="color:#888;margin-bottom:20px;font-size:14px;">จัดการข้อมูลผู้พูด — rename speaker ใน Timeline จะ enroll เสียงอัตโนมัติ</p>
+
+    <table style="width:100%;border-collapse:collapse;" id="vp-table">
+        <thead>
+            <tr style="border-bottom:1px solid #333;text-align:left;">
+                <th style="padding:8px;">ชื่อเล่น</th>
+                <th style="padding:8px;">ชื่อ-สกุล</th>
+                <th style="padding:8px;">หน่วยงาน</th>
+                <th style="padding:8px;">ตำแหน่ง</th>
+                <th style="padding:8px;">เสียง</th>
+                <th style="padding:8px;width:40px;"></th>
+            </tr>
+        </thead>
+        <tbody id="vp-body">
+            <tr><td colspan="6" style="padding:20px;text-align:center;color:#666;">กำลังโหลด...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+function loadVoiceprints() {
+    fetch('/api/voiceprints').then(r => r.json()).then(data => {
+        const tbody = document.getElementById('vp-body');
+        if (!data.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="padding:20px;text-align:center;color:#666;">ยังไม่มี — rename speaker ใน Timeline เพื่อเริ่มเก็บเสียง</td></tr>';
+            return;
+        }
+        tbody.innerHTML = data.map(v => {
+            const secs = Math.round(v.total_seconds);
+            const mins = Math.floor(secs / 60);
+            const s = secs % 60;
+            const timeStr = mins > 0 ? mins + 'm ' + s + 's' : s + 's';
+            return '<tr style="border-bottom:1px solid #222;">' +
+                '<td style="padding:8px;font-weight:500;">' + v.name + '</td>' +
+                '<td style="padding:8px;"><span class="editable-field" onclick="editField(this,\'' + v.name + '\',\'full_name\')">' + (v.full_name || '<span style=&quot;color:#ccc&quot;>คลิกเพื่อใส่</span>') + '</span></td>' +
+                '<td style="padding:8px;"><span class="editable-field" onclick="editField(this,\'' + v.name + '\',\'organization\')">' + (v.organization || '<span style=&quot;color:#ccc&quot;>-</span>') + '</span></td>' +
+                '<td style="padding:8px;"><span class="editable-field" onclick="editField(this,\'' + v.name + '\',\'position\')">' + (v.position || '<span style=&quot;color:#ccc&quot;>-</span>') + '</span></td>' +
+                '<td style="padding:8px;font-size:12px;color:#888;">' + timeStr + ' (' + v.num_sessions + ')</td>' +
+                '<td style="padding:8px;text-align:center;"><button onclick="deleteVp(\'' + v.name + '\')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;" title="ลบ">x</button></td>' +
+                '</tr>';
+        }).join('');
+    });
+}
+
+function editField(el, name, field) {
+    const old = el.textContent.trim();
+    const isPlaceholder = old === 'คลิกเพื่อใส่' || old === '-';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = isPlaceholder ? '' : old;
+    input.style.cssText = 'width:100%;padding:4px 8px;background:#fff;border:1px solid #6366f1;border-radius:4px;color:#000;font-size:inherit;';
+    el.replaceWith(input);
+    input.focus();
+    function save() {
+        const val = input.value.trim();
+        fetch('/api/voiceprints/' + encodeURIComponent(name), {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({[field]: val})
+        }).then(() => loadVoiceprints());
+    }
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') loadVoiceprints(); });
+    input.addEventListener('blur', save);
+}
+
+function deleteVp(name) {
+    showModal({
+        title: 'ลบ Voiceprint',
+        message: 'ต้องการลบ "' + name + '"?',
+        type: 'confirm',
+        okText: 'ลบ',
+        danger: true,
+        onConfirm: () => fetch('/api/voiceprints/' + encodeURIComponent(name), {method: 'DELETE'}).then(() => loadVoiceprints())
+    });
+}
+
+document.addEventListener('DOMContentLoaded', loadVoiceprints);
+</script>
+
+<style>
+.editable-field { cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.editable-field:hover { background: #f1f5f9; }
+</style>
+{% endblock %}

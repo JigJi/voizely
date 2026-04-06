@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}History — Speech-to-Text{% endblock %}
+
+{% block content %}
+<hgroup>
+    <h1>ประวัติการแปลงเสียง</h1>
+    <p>รายการทั้งหมด</p>
+</hgroup>
+
+{% if transcriptions %}
+<table>
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>ไฟล์</th>
+            <th>สถานะ</th>
+            <th>ภาษา</th>
+            <th>ความยาว</th>
+            <th>เวลาประมวลผล</th>
+            <th>วันที่</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in transcriptions %}
+        <tr>
+            <td>{{ t.id }}</td>
+            <td>{{ t.audio_file.original_filename }}</td>
+            <td>
+                {% if t.status.value == 'completed' %}
+                    <mark>เสร็จสิ้น</mark>
+                {% elif t.status.value == 'in_progress' %}
+                    <mark class="processing">กำลังประมวลผล</mark>
+                {% elif t.status.value == 'failed' %}
+                    <mark class="failed">ล้มเหลว</mark>
+                {% else %}
+                    <mark class="pending">รอดำเนินการ</mark>
+                {% endif %}
+            </td>
+            <td>{{ t.detected_language or '-' }}</td>
+            <td>
+                {% if t.audio_file.duration_seconds %}
+                    {{ "%.0f"|format(t.audio_file.duration_seconds) }}s
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>
+                {% if t.processing_time_seconds %}
+                    {{ "%.1f"|format(t.processing_time_seconds) }}s
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>{{ t.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td><a href="/transcriptions/{{ t.id }}">ดู</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<article>
+    <p>ยังไม่มีประวัติการแปลงเสียง</p>
+    <a href="/upload" role="button">เริ่มต้นใช้งาน</a>
+</article>
+{% endif %}
+{% endblock %}

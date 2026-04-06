@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}ตั้งค่าการถอดเสียง — SpeechText{% endblock %}
+{% block content %}
+<div style="max-width:560px;margin:40px auto;padding:24px;">
+    <h2 style="margin-bottom:4px;">ตั้งค่าการถอดเสียง</h2>
+    <p style="color:#888;margin-bottom:24px;font-size:14px;">{{ audio.original_filename }}</p>
+
+    <form action="/api/audio/{{ audio.id }}/start" method="post">
+        <div style="margin-bottom:20px;">
+            <label style="display:block;margin-bottom:6px;font-weight:500;">กลุ่ม</label>
+            <select name="group_id" style="width:100%;padding:10px 12px;border:1px solid #333;border-radius:6px;background:#fff;color:#000;font-size:14px;">
+                {% if groups is defined %}
+                {% for g in groups %}
+                <option value="{{ g.group.id }}" {% if g.group.is_default %}selected{% endif %}>{{ g.group.name }}</option>
+                {% endfor %}
+                {% endif %}
+            </select>
+        </div>
+
+        <div style="margin-bottom:20px;">
+            <label style="display:block;margin-bottom:6px;font-weight:500;">Diarization (แยกผู้พูด)</label>
+            <select name="diarization_model" style="width:100%;padding:10px 12px;border:1px solid #333;border-radius:6px;background:#fff;color:#000;font-size:14px;">
+                <option value="deepgram" selected>Deepgram Nova-3 (API) — ~5 บาท/ไฟล์</option>
+                <option value="pyannote">Pyannote (Local GPU) — ฟรี</option>
+                <option value="gemini">Gemini 2.5 Flash (API)</option>
+                <option value="gpt">GPT-4o (API)</option>
+            </select>
+        </div>
+
+        <div style="margin-bottom:24px;">
+            <label style="display:block;margin-bottom:6px;font-weight:500;">Transcription (ถอดคำ)</label>
+            <select name="transcription_model" style="width:100%;padding:10px 12px;border:1px solid #333;border-radius:6px;background:#fff;color:#000;font-size:14px;">
+                <option value="gemini" selected>Gemini 2.5 Flash (API) — ~15 บาท/ชม.</option>
+            </select>
+        </div>
+
+        <button type="submit" style="width:100%;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:500;cursor:pointer;">
+            เริ่มถอดเสียง
+        </button>
+    </form>
+</div>
+{% endblock %}

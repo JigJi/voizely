@@ -1,0 +1,329 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if transcription.status.value in ('pending', 'in_progress') %}
+<div class="processing-state"
+     hx-get="/htmx/transcription-progress/{{ transcription.id }}"
+     hx-trigger="load, every 2s"
+     hx-swap="innerHTML">
+    <div class="spinner-lg"></div>
+    <p>เริ่มต้นประมวลผล...</p>
+</div>
+
+{% elif transcription.status.value == 'failed' %}
+<div class="card error-card">
+    <h3>เกิดข้อผิดพลาด</h3>
+    <p>{{ transcription.status_message or 'ไม่ทราบสาเหตุ' }}</p>
+    <form hx-post="/htmx/retry/{{ transcription.id }}" hx-target="closest .card" hx-swap="outerHTML">
+        <button type="submit" class="btn btn-primary">ลองใหม่</button>
+    </form>
+</div>
+
+{% else %}
+{# === COMPLETED === #}
+<div class="content-layout">
+
+{# === LEFT: Transcript === #}
+<div class="content-main">
+
+{# Audio player #}
+<div class="player-bar">
+    <audio controls preload="metadata" id="audio-player">
+        <source src="/api/audio/{{ transcription.audio_file.id }}/stream"
+                type="{{ transcription.audio_file.mime_type or 'audio/mpeg' }}">
+    </audio>
+    <div class="player-info">
+        <span class="editable-filename" onclick="editFilename(this, {{ transcription.audio_file.id }})" title="คลิกเพื่อแก้ไขชื่อ" style="cursor:pointer;">{{ transcription.audio_file.original_filename | truncate(30) }}</span>
+        <span class="dot"></span>
+        <span>{{ transcription.detected_language or '?' }}</span>
+        <span class="dot"></span>
+        <span>{{ "%.0f"|format(transcription.processing_time_seconds) }}s</span>
+    </div>
+</div>
+
+{# Tabs #}
+<div class="tabs-bar">
+    <button class="tab active" onclick="showTab('summary', this)">Summary</button>
+    <button class="tab" onclick="showTab('timeline', this)">Timeline</button>
+    <button class="tab" onclick="showTab('raw', this)">Raw</button>
+    <div class="tab-actions">
+        <button class="tab-action" onclick="copyText()" type="button">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+            คัดลอก
+        </button>
+        <button class="tab-action" onclick="applyCorrections({{ transcription.id }})" type="button" title="Apply Correction Dictionary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+            Correction
+        </button>
+    </div>
+</div>
+
+{# Tab: Summary — compact dashboard #}
+<div class="tab-panel" id="tab-summary">
+    <div class="summary-compact">
+
+        {# Row 1: Meta line #}
+        <div class="summary-meta-line">
+            <span>{{ transcription.created_at.strftime('%d/%m/%Y %H:%M') }}</span>
+            <span class="dot"></span>
+            <span>{% set mins = (total_duration / 60)|int %}{% set secs = (total_duration % 60)|int %}{{ mins }}:{{ "%02d"|format(secs) }}</span>
+            <span class="dot"></span>
+            <span class="editable-filename" onclick="editFilename(this, {{ transcription.audio_file.id }})" title="คลิกเพื่อแก้ไขชื่อ" style="cursor:pointer;">{{ transcription.audio_file.original_filename }}</span>
+            <svg onclick="editFilename(this.previousElementSibling, {{ transcription.audio_file.id }})" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="cursor:pointer;opacity:0.5;margin-left:4px;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </div>
+
+        {# Row 2: Title + description #}
+        <div class="summary-title" style="cursor:pointer;" onclick="editTitle(this, {{ transcription.id }})" title="คลิกเพื่อแก้ไข">{{ transcription.auto_title or transcription.audio_file.original_filename }}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4;margin-left:6px;vertical-align:middle;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </div>
+        {% if transcription.summary_short %}
+        <div class="summary-desc">{{ transcription.summary_short }}</div>
+        {% endif %}
+
+        {# Row 3: Info cards — type, tone, sentiment, quality #}
+        <div class="summary-info-row">
+            {% if transcription.meeting_type %}
+            <div class="info-chip">
+                <span class="info-chip-label">ประเภท</span>
+                <span class="info-chip-value">{{ transcription.meeting_type }}</span>
+            </div>
+            {% endif %}
+            {% if transcription.meeting_tone %}
+            <div class="info-chip">
+                <span class="info-chip-label">โทน</span>
+                <span class="info-chip-value">{{ transcription.meeting_tone }}</span>
+            </div>
+            {% endif %}
+            {% if transcription.sentiment %}
+            <div class="info-chip">
+                <span class="info-chip-label">Sentiment</span>
+                <span class="info-chip-value sentiment-{{ transcription.sentiment }}">{{ transcription.sentiment }}</span>
+            </div>
+            {% endif %}
+            {% if transcription.deepgram_confidence %}
+            {% set conf = (transcription.deepgram_confidence * 100)|round|int %}
+            <div class="info-chip">
+                <span class="info-chip-label">คุณภาพเสียง</span>
+                <span class="info-chip-value {% if conf >= 80 %}text-good{% elif conf >= 60 %}text-ok{% else %}text-low{% endif %}">{{ conf }}%</span>
+            </div>
+            {% endif %}
+        </div>
+
+        {# Row 4: Topics #}
+        {% if transcription.topics %}
+        <div class="keyword-list">{% for topic in transcription.topics|from_json %}<span class="keyword-tag" onclick="editTopic(this, {{ transcription.id }})" style="cursor:pointer;" title="คลิกเพื่อแก้ไข">{{ topic }}</span>{% endfor %}</div>
+        {% endif %}
+
+        {# Row 5: Speakers + Decisions + Actions — 3 columns #}
+        <div class="summary-cols">
+            <div class="summary-section">
+                <div class="summary-label">ผู้พูด</div>
+                {% for spk in speaker_stats %}
+                <div class="speaker-row-sm">
+                    <span class="speaker-name-sm">{{ spk.name }}</span>
+                    <div class="speaker-bar-bg-sm"><div class="speaker-bar-sm" style="width:{{ spk.percent }}%;background:var(--clr-{{ loop.index0 % 6 }})"></div></div>
+                    <span class="speaker-pct">{{ spk.percent }}%</span>
+                </div>
+                {% endfor %}
+            </div>
+
+            {% set decisions = transcription.key_decisions|from_json if transcription.key_decisions else [] %}
+            {% if decisions %}
+            <div class="summary-section">
+                <div class="summary-label">มติ/ข้อสรุป</div>
+                <ul class="summary-list">{% for d in decisions %}<li>{{ d }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+
+            {% set actions = transcription.action_items|from_json if transcription.action_items else [] %}
+            {% if actions %}
+            <div class="summary-section">
+                <div class="summary-label">สิ่งที่ต้องทำ</div>
+                <ul class="summary-list">{% for item in actions %}<li>{{ item.task }}</li>{% endfor %}</ul>
+            </div>
+            {% endif %}
+        </div>
+
+    </div>
+</div>
+
+{# Tab: Timeline — speaker + timestamps #}
+<div class="tab-panel hidden" id="tab-timeline">
+    {# Speaker list + tools #}
+    <div class="tl-speakers-bar">
+        {% set ns = namespace(seen={}) %}
+        {% for seg in transcription.segments %}
+            {% set speaker = seg.speaker or 'Speaker 1' %}
+            {% if speaker not in ns.seen %}
+                {% set _ = ns.seen.update({speaker: ns.seen|length % 6}) %}
+                <span class="tl-speaker-chip" style="border-color:var(--clr-{{ ns.seen[speaker] }});" onclick="renameSpeaker('{{ speaker }}', {{ transcription.id }})" title="คลิกเพื่อเปลี่ยนชื่อทั้งหมด">
+                    <span class="tl-chip-dot" style="background:var(--clr-{{ ns.seen[speaker] }})"></span>
+                    {{ speaker }}
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </span>
+            {% endif %}
+        {% endfor %}
+        <button class="tl-tool-btn" onclick="scrollToActive()" title="ไปยังตำแหน่งที่กำลังเล่น">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            ตำแหน่งปัจจุบัน
+        </button>
+        <button class="tl-tool-btn" onclick="toggleFindReplace()" title="ค้นหา / แก้คำ">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/></svg>
+            ค้นหา / แก้คำ
+        </button>
+    </div>
+
+    {# Find & Replace bar #}
+    <div id="find-replace-bar" class="fr-bar hidden">
+        <input type="text" id="fr-find" placeholder="ค้นหา..." class="fr-input" oninput="doSearch()">
+        <span class="fr-arrow">→</span>
+        <input type="text" id="fr-replace" placeholder="แก้เป็น (เว้นว่างถ้าแค่ค้นหา)" class="fr-input">
+        <span id="fr-count" class="fr-count"></span>
+        <button id="fr-btn" class="fr-btn" onclick="doReplace({{ transcription.id }})">แก้ทั้งหมด</button>
+    </div>
+
+    <div class="timeline" id="full-text">
+        {% set ns = namespace(prev_speaker='', speaker_colors={}) %}
+        {% for seg in transcription.segments %}
+            {% set speaker = seg.speaker or 'Speaker 1' %}
+
+            {% if speaker not in ns.speaker_colors %}
+                {% set _ = ns.speaker_colors.update({speaker: ns.speaker_colors|length % 6}) %}
+            {% endif %}
+
+            {% if speaker != ns.prev_speaker %}
+            <div class="tl-speaker">
+                <div class="tl-avatar" style="background:var(--clr-{{ ns.speaker_colors[speaker] }});">
+                    {{ speaker[0] }}
+                </div>
+                <span class="tl-name">{{ speaker }}</span>
+                <button class="tl-edit-icon" onclick="changeSegmentSpeaker({{ seg.id }}, '{{ speaker }}')" title="เปลี่ยน speaker จากจุดนี้">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </button>
+            </div>
+            {% set ns.prev_speaker = speaker %}
+            {% endif %}
+
+            <div class="tl-item"
+                 data-start="{{ seg.start_time }}" data-end="{{ seg.end_time }}"
+                 data-seg-id="{{ seg.id }}"
+                 onclick="seekAudio({{ seg.start_time }})">
+                <span class="tl-time">{{ "%02d:%02d"|format(seg.start_time // 60, seg.start_time % 60) }} - {{ "%02d:%02d"|format(seg.end_time // 60, seg.end_time % 60) }}</span>
+                <span class="tl-text">{{ seg.text }}</span>
+            </div>
+        {% endfor %}
+    </div>
+</div>
+
+{# Tab: Raw — plain text only #}
+<div class="tab-panel hidden" id="tab-raw">
+    <div class="prose" style="white-space: pre-wrap; line-height: 2;">{{ transcription.full_text }}</div>
+</div>
+
+</div>
+
+{# === RIGHT: Actions Panel === #}
+<div class="actions-panel">
+    <h3 class="actions-title">Actions</h3>
+
+    <button class="action-btn" onclick="openMomModal({{ transcription.id }})">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/></svg>
+        สร้าง MoM
+    </button>
+
+    <button class="action-btn" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        ส่ง Email
+        <span class="action-soon">เร็วๆ นี้</span>
+    </button>
+
+    <button class="action-btn" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        สร้างเอกสาร
+        <span class="action-soon">เร็วๆ นี้</span>
+    </button>
+
+    {% if groups is defined %}
+    <div class="action-info" style="margin-bottom:12px;">
+        <h4>กลุ่ม</h4>
+        <select onchange="moveToGroup({{ transcription.id }}, this.value)" style="width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff;color:#000;">
+            {% for g in groups %}
+            <option value="{{ g.group.id }}" {% if transcription.group_id == g.group.id or (transcription.group_id is none and g.group.is_default) %}selected{% endif %}>{{ g.group.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+
+    {% if transcription.total_cost_usd %}
+    {% set rate = 34.5 %}
+    <div class="action-info">
+        <h4>ค่าใช้จ่าย</h4>
+        {% set diar_model = transcription.model_size.split('+')[0] if transcription.model_size and '+' in transcription.model_size else 'pyannote' %}
+        <div class="action-info-row">
+            <span>{{ 'Deepgram' if diar_model == 'deepgram' else 'Pyannote (Local)' }}</span>
+            <span>{{ "%.2f"|format((transcription.deepgram_cost_usd or 0) * rate) }} บาท</span>
+        </div>
+        <div class="action-info-row">
+            <span>Gemini</span>
+            <span>{{ "%.2f"|format((transcription.gemini_cost_usd or 0) * rate) }} บาท</span>
+        </div>
+        <div class="action-info-row total">
+            <span>รวม</span>
+            <span>{{ "%.2f"|format((transcription.total_cost_usd or 0) * rate) }} บาท</span>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+</div>
+
+{# === MoM Modal === #}
+<div id="mom-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeMomModal()">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Minutes of Meeting</h2>
+            <div class="modal-header-actions">
+                <button class="mom-header-btn" onclick="toggleMomEdit(true)" id="mom-edit-btn">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Edit
+                </button>
+                <a class="mom-header-btn" href="/api/transcriptions/{{ transcription.id }}/export-docx">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                    Export
+                </a>
+                <button class="mom-header-btn" onclick="regenerateMom({{ transcription.id }})" id="regen-mom-btn">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    Regenerate
+                </button>
+                <button class="mom-header-btn mom-close-btn" onclick="closeMomModal()">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="modal-body">
+            <div id="mom-view" class="prose mom-content"></div>
+            <script id="mom-raw" type="text/plain">{% if transcription.mom_full %}{{ transcription.mom_full }}{% elif transcription.summary %}{{ transcription.summary }}{% endif %}</script>
+            <textarea id="mom-editor" class="mom-editor hidden">{{ transcription.mom_full or transcription.summary or '' }}</textarea>
+        </div>
+        <div id="mom-edit-footer" class="modal-footer hidden">
+            <button class="btn-save" onclick="saveMom({{ transcription.id }})">บันทึก</button>
+            <button class="btn-cancel" onclick="toggleMomEdit(false)">ยกเลิก</button>
+        </div>
+    </div>
+</div>
+
+{# === Confirm Modal === #}
+<div id="confirm-modal" class="modal-overlay hidden" onclick="if(event.target===this)closeConfirmModal()">
+    <div class="confirm-box">
+        <div class="confirm-icon">!</div>
+        <div class="confirm-title">สร้าง MoM ใหม่?</div>
+        <div class="confirm-desc">ข้อมูล MoM เดิมจะถูกแทนที่ทั้งหมดและไม่สามารถกู้คืนได้</div>
+        <div class="confirm-actions">
+            <button class="btn-cancel" onclick="closeConfirmModal()">ยกเลิก</button>
+            <button class="btn-danger" onclick="confirmRegenMom()">สร้างใหม่</button>
+        </div>
+    </div>
+</div>
+
+{% endif %}
+{% endblock %}

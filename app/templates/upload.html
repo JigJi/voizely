@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Upload — Speech-to-Text{% endblock %}
+
+{% block content %}
+<hgroup>
+    <h1>Upload ไฟล์เสียง</h1>
+    <p>รองรับ MP3, WAV, M4A, OGG, FLAC, WebM, MP4, WMA</p>
+</hgroup>
+
+<article>
+    <form hx-post="/htmx/upload"
+          hx-encoding="multipart/form-data"
+          hx-indicator="#upload-spinner"
+          hx-target="#upload-feedback">
+
+        <label for="file">เลือกไฟล์เสียง</label>
+        <input type="file" id="file" name="file"
+               accept=".mp3,.wav,.m4a,.ogg,.flac,.webm,.mp4,.wma"
+               required>
+
+        <div class="grid">
+            <div>
+                <label for="model_size">Model</label>
+                <select id="model_size" name="model_size">
+                    <option value="Vinxscribe/biodatlab-whisper-th-large-v3-faster" selected>biodatlab-th-large-v3 (แนะนำ)</option>
+                    <option value="Vinxscribe/biodatlab-whisper-th-medium-faster">biodatlab-th-medium (เร็วกว่า)</option>
+                    <option value="large-v3">large-v3 (standard)</option>
+                    <option value="large-v3-turbo">large-v3-turbo (เร็วสุด)</option>
+                </select>
+            </div>
+            <div>
+                <label for="language">ภาษา</label>
+                <select id="language" name="language">
+                    <option value="" selected>Auto-detect (แนะนำ)</option>
+                    <option value="th">Thai</option>
+                    <option value="en">English</option>
+                    <option value="ja">Japanese</option>
+                    <option value="zh">Chinese</option>
+                </select>
+            </div>
+        </div>
+
+        <button type="submit" id="upload-btn">
+            Upload & Transcribe
+        </button>
+
+        <div id="upload-spinner" class="htmx-indicator">
+            <progress></progress>
+            <p>กำลังอัพโหลดไฟล์...</p>
+        </div>
+
+        <div id="upload-feedback"></div>
+    </form>
+</article>
+{% endblock %}

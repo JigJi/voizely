@@ -1,0 +1,29 @@
+<article>
+    <header>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="margin:0;">ข้อความทั้งหมด</h3>
+            <button class="secondary outline" onclick="copyText()" type="button" style="width:auto;">
+                Copy
+            </button>
+        </div>
+    </header>
+    <div id="full-text" class="full-text">{{ transcription.full_text }}</div>
+</article>
+
+{% if transcription.segments %}
+<article>
+    <header><h3>Segments with Timestamps</h3></header>
+    <div class="segments-list">
+        {% for seg in transcription.segments %}
+        <div class="segment">
+            <span class="timestamp">
+                [{{ "%02d:%02d:%02d"|format(seg.start_time // 3600, (seg.start_time % 3600) // 60, seg.start_time % 60) }}
+                 —
+                 {{ "%02d:%02d:%02d"|format(seg.end_time // 3600, (seg.end_time % 3600) // 60, seg.end_time % 60) }}]
+            </span>
+            <span class="seg-text">{{ seg.text }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</article>
+{% endif %}

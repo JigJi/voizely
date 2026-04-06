@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Correction Dictionary — SpeechText{% endblock %}
+{% block content %}
+<div style="max-width:720px;margin:0 auto;padding:24px;">
+    <h2 style="margin-bottom:8px;">Correction Dictionary</h2>
+    <p style="color:#888;margin-bottom:20px;font-size:14px;">คำที่เพิ่มจะถูก auto-correct ทุกครั้งที่ถอดเสียงใหม่</p>
+
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+        <input id="new-wrong" type="text" placeholder="คำผิด" style="flex:1;padding:8px 12px;border:1px solid #333;border-radius:6px;background:#fff;color:#000;">
+        <input id="new-correct" type="text" placeholder="คำถูก" style="flex:1;padding:8px 12px;border:1px solid #333;border-radius:6px;background:#fff;color:#000;">
+        <button onclick="addCorrection()" style="padding:8px 16px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap;">เพิ่ม</button>
+    </div>
+
+    <table style="width:100%;border-collapse:collapse;" id="corrections-table">
+        <thead>
+            <tr style="border-bottom:1px solid #333;text-align:left;">
+                <th style="padding:8px;">คำผิด</th>
+                <th style="padding:8px;">คำถูก</th>
+                <th style="padding:8px;width:60px;"></th>
+            </tr>
+        </thead>
+        <tbody id="corrections-body">
+            <tr><td colspan="3" style="padding:20px;text-align:center;color:#666;">กำลังโหลด...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+function loadCorrections() {
+    fetch('/api/corrections').then(r => r.json()).then(data => {
+        const tbody = document.getElementById('corrections-body');
+        if (!data.length) {
+            tbody.innerHTML = '<tr><td colspan="3" style="padding:20px;text-align:center;color:#666;">ยังไม่มีรายการ</td></tr>';
+            return;
+        }
+        tbody.innerHTML = data.map(c => `
+            <tr data-id="${c.id}" style="border-bottom:1px solid #222;">
+                <td style="padding:8px;"><span class="editable" onclick="editCell(this,'wrong',${c.id})">${c.wrong}</span></td>
+                <td style="padding:8px;"><span class="editable" onclick="editCell(this,'correct',${c.id})">${c.correct}</span></td>
+                <td style="padding:8px;text-align:center;">
+                    <button onclick="deleteCorrection(${c.id})" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:16px;" title="ลบ">x</button>
+                </td>
+            </tr>
+        `).join('');
+    });
+}
+
+function addCorrection() {
+    const wrong = document.getElementById('new-wrong').value.trim();
+    const correct = document.getElementById('new-correct').value.trim();
+    if (!wrong || !correct) return;
+    fetch('/api/corrections', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({wrong, correct})
+    }).then(r => r.json()).then(() => {
+        document.getElementById('new-wrong').value = '';
+        document.getElementById('new-correct').value = '';
+        loadCorrections();
+    });
+}
+
+function deleteCorrection(id) {
+    showModal({
+        title: 'ลบรายการ',
+        message: 'ต้องการลบรายการนี้?',
+        type: 'confirm',
+        okText: 'ลบ',
+        danger: true,
+        onConfirm: () => fetch('/api/corrections/' + id, {method: 'DELETE'}).then(() => loadCorrections())
+    });
+}
+
+function editCell(el, field, id) {
+    const old = el.textContent;
+    const input = document.createElement('input');
+    input.value = old;
+    input.style.cssText = 'width:100%;padding:4px 8px;background:#1a1a2e;border:1px solid #6366f1;border-radius:4px;color:#fff;';
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+    function save() {
+        const val = input.value.trim();
+        if (!val || val === old) { input.replaceWith(el); return; }
+        fetch('/api/corrections/' + id, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({[field]: val})
+        }).then(() => loadCorrections());
+    }
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') input.replaceWith(el); });
+    input.addEventListener('blur', save);
+}
+
+document.addEventListener('DOMContentLoaded', loadCorrections);
+</script>
+{% endblock %}

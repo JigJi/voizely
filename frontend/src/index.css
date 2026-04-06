@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+body {
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: #1f2937;
+  background: #fff;
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* MoM rendered content */
+.mom-content h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 20px;
+  margin-bottom: 8px;
+  color: #374151;
+}
+
+.mom-content ul {
+  list-style: disc;
+  padding-left: 20px;
+  margin-bottom: 12px;
+}
+
+.mom-content li {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #4b5563;
+  margin-bottom: 4px;
+}
+
+.mom-content p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #4b5563;
+  margin-bottom: 8px;
+}
+
+.mom-content strong {
+  font-weight: 600;
+  color: #374151;
+}
+
+.mom-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.mom-table th {
+  background: #f3f4f6;
+  padding: 8px 12px;
+  text-align: left;
+  border: 1px solid #e5e7eb;
+  font-weight: 600;
+  color: #374151;
+}
+
+.mom-table td {
+  padding: 8px 12px;
+  border: 1px solid #e5e7eb;
+  color: #4b5563;
+}
+
+.mom-table tbody tr:hover {
+  background: #f9fafb;
+}
