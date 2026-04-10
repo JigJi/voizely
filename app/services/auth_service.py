@@ -10,10 +10,13 @@ logger = logging.getLogger(__name__)
 
 
 def authenticate(username: str, password: str, db: Session) -> User | None:
-    """Authenticate user. Returns User on success, None on failure."""
+    """Authenticate user. Try AD first if enabled, fallback to fixed."""
+    profile = None
     if settings.AD_ENABLED:
         profile = _authenticate_ad(username, password)
-    else:
+        if not profile:
+            logger.info("AD auth failed for %s, falling back to fixed auth", username)
+    if not profile:
         profile = _authenticate_fixed(username, password)
 
     if not profile:
@@ -30,23 +33,106 @@ def authenticate(username: str, password: str, db: Session) -> User | None:
             department=profile.get("department"),
         )
         db.add(user)
+    else:
+        # Update profile fields only if new value is meaningful (not @local placeholder)
+        new_email = profile.get("email", "")
+        if new_email and "@local" not in new_email:
+            user.email = new_email
+        if profile.get("first_name"):
+            user.first_name = profile["first_name"]
+        if profile.get("last_name"):
+            user.last_name = profile["last_name"]
+        if profile.get("department"):
+            user.department = profile["department"]
 
     user.last_login_at = datetime.now(timezone(timedelta(hours=7)))
     db.commit()
     db.refresh(user)
+
+    # Auto-sync SpeakerProfile from AD user
+    if settings.AD_ENABLED and profile.get("email") and "@local" not in profile.get("email", ""):
+        _sync_speaker_profile(db, profile)
+
     return user
 
 
+def _shorten_department(dept: str) -> str:
+    """Shorten department name to max ~4 chars, prefer uppercase initials."""
+    if not dept:
+        return ""
+    dept = dept.strip()
+    # If already short (<=4 chars, no spaces), use as-is
+    if len(dept) <= 4 and ' ' not in dept:
+        return dept.upper()
+    # Multiple words: take first letter of each word (uppercase)
+    words = dept.split()
+    if len(words) > 1:
+        initials = ''.join(w[0].upper() for w in words if w and w[0].isalpha())
+        if initials:
+            return initials
+    # Single long word: take first 3 chars uppercase
+    return dept[:3].upper()
+
+
+def _sync_speaker_profile(db: Session, profile: dict):
+    """Auto-create/update SpeakerProfile from AD user data."""
+    try:
+        from app.models.transcription import SpeakerProfile
+        nickname = profile.get("first_name") or profile.get("username", "")
+        if not nickname:
+            return
+
+        existing = db.query(SpeakerProfile).filter(
+            SpeakerProfile.email == profile.get("email")
+        ).first()
+
+        if existing:
+            # Update from AD but only if source is "ad"
+            if existing.source == "ad":
+                existing.full_name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
+                existing.department = profile.get("department", "")
+                existing.organization = profile.get("organization", "")
+                existing.updated_at = datetime.now(timezone(timedelta(hours=7)))
+        else:
+            # Handle nickname collision: first_name → first_name + dept_short → username
+            nick_exists = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == nickname).first()
+            if nick_exists:
+                dept_short = _shorten_department(profile.get("department", ""))
+                if dept_short:
+                    candidate = f"{nickname} {dept_short}"
+                    if not db.query(SpeakerProfile).filter(SpeakerProfile.nickname == candidate).first():
+                        nickname = candidate
+                    else:
+                        nickname = profile.get("username", nickname)
+                else:
+                    nickname = profile.get("username", nickname)
+
+            p = SpeakerProfile(
+                nickname=nickname,
+                source="ad",
+                email=profile.get("email", ""),
+                full_name=f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip(),
+                organization=profile.get("organization", ""),
+                department=profile.get("department", ""),
+            )
+            db.add(p)
+
+        db.commit()
+    except Exception as e:
+        logger.warning("SpeakerProfile sync failed: %s", e)
+        db.rollback()
+
+
 def _authenticate_fixed(username: str, password: str) -> dict | None:
-    if username == settings.FIXED_USERNAME and password == settings.FIXED_PASSWORD:
-        return {
-            "username": username,
-            "email": f"{username}@local",
-            "first_name": "Admin",
-            "last_name": "",
-            "department": "Dev",
-        }
-    return None
+    if password != settings.FIXED_PASSWORD:
+        return None
+    return {
+        "username": username,
+        "email": f"{username}@local",
+        "first_name": username,
+        "last_name": "",
+        "department": "",
+    }
 
 
 def _authenticate_ad(username: str, password: str) -> dict | None:

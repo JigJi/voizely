@@ -5,23 +5,33 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.transcription import TranscriptionStatus
+from app.models.user import User
 from app.schemas.transcription import (
     TranscriptionCreate,
     TranscriptionProgress,
     TranscriptionResponse,
 )
 from app.services import audio_service, transcription_service
+from app.routers.auth import get_current_user
 
 router = APIRouter(tags=["transcription"])
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _check_owner(t, current_user: User):
+    """Raise 403 if user doesn't own this transcription."""
+    if current_user.role == "ADMIN":
+        return
+    if t.user_id is not None and t.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
 # --- REST API ---
 
 @router.get("/api/transcriptions")
-def list_transcriptions(db: Session = Depends(get_db)):
+def list_transcriptions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import TranscriptionSegment
-    items = transcription_service.get_all_transcriptions(db)
+    items = transcription_service.get_all_transcriptions(db, user_id=current_user.id)
     return [{
         "id": t.id,
         "audio_file_id": t.audio_file_id,
@@ -36,10 +46,11 @@ def list_transcriptions(db: Session = Depends(get_db)):
 
 
 @router.get("/api/transcriptions/{transcription_id}")
-def get_transcription_detail(transcription_id: int, db: Session = Depends(get_db)):
+def get_transcription_detail(transcription_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
     return {
         "id": t.id,
         "audio_file_id": t.audio_file_id,
@@ -86,6 +97,7 @@ def start_transcription(
     audio_id: int,
     body: TranscriptionCreate = TranscriptionCreate(),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     audio = audio_service.get_audio(db, audio_id)
     if not audio:
@@ -96,7 +108,8 @@ def start_transcription(
         return existing
 
     t = transcription_service.create_transcription(
-        db, audio, language=body.language, model_size=body.model_size
+        db, audio, language=body.language, model_size=body.model_size,
+        user_id=current_user.id,
     )
     return t
 
@@ -149,7 +162,7 @@ async def htmx_upload(
 
 
 @router.post("/api/transcriptions/{transcription_id}/update-title")
-async def update_title(transcription_id: int, request: Request, db: Session = Depends(get_db)):
+async def update_title(transcription_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     body = await request.json()
     title = body.get("title", "").strip()
     if not title:
@@ -157,7 +170,15 @@ async def update_title(transcription_id: int, request: Request, db: Session = De
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
+    old_title = t.auto_title or ""
     t.auto_title = title
+    # Update title in mom_full header too
+    if t.mom_full and old_title:
+        t.mom_full = t.mom_full.replace(f"**หัวข้อ:** {old_title}", f"**หัวข้อ:** {title}")
+    elif t.mom_full:
+        import re
+        t.mom_full = re.sub(r'\*\*หัวข้อ:\*\* .+', f'**หัวข้อ:** {title}', t.mom_full)
     db.commit()
     return {"ok": True}
 
@@ -167,6 +188,7 @@ async def start_with_config(
     audio_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     form = await request.form()
     diarization_model = form.get("diarization_model", "pyannote")
@@ -188,42 +210,58 @@ async def start_with_config(
     t = transcription_service.create_transcription(
         db, audio,
         model_size=f"{diarization_model}+{transcription_model}",
+        user_id=current_user.id,
     )
     if group_id:
         t.group_id = int(group_id)
-        db.commit()
+    else:
+        from app.models.transcription import TranscriptionGroup
+        default_group = db.query(TranscriptionGroup).filter(TranscriptionGroup.is_default == True).first()
+        if default_group:
+            t.group_id = default_group.id
+    db.commit()
 
     from fastapi.responses import RedirectResponse
     return RedirectResponse(f"/transcriptions/{t.id}", status_code=303)
 
 
 @router.delete("/api/transcriptions/{transcription_id}")
-def delete_transcription(transcription_id: int, db: Session = Depends(get_db)):
+def delete_transcription(transcription_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
     # Delete segments
     from app.models.transcription import TranscriptionSegment
     db.query(TranscriptionSegment).filter(
         TranscriptionSegment.transcription_id == transcription_id
     ).delete()
+    # Clear meeting_recording FK if linked
+    from app.models.meeting import MeetingRecording
+    for mr in db.query(MeetingRecording).filter(MeetingRecording.transcription_id == transcription_id).all():
+        mr.transcription_id = None
+        mr.status = "discovered"
     # Delete audio file from disk
     from pathlib import Path
     audio = t.audio_file
-    file_path = Path(audio.file_path)
-    if file_path.exists():
-        file_path.unlink()
-    # Delete from DB
+    if audio:
+        file_path = Path(audio.file_path)
+        if file_path.exists():
+            file_path.unlink()
+        # Clear meeting_recording audio FK too
+        for mr in db.query(MeetingRecording).filter(MeetingRecording.audio_file_id == audio.id).all():
+            mr.audio_file_id = None
+        db.delete(audio)
     db.delete(t)
-    db.delete(audio)
     db.commit()
     return {"ok": True}
 
 
 @router.post("/htmx/delete/{transcription_id}", response_class=HTMLResponse)
-def htmx_delete(transcription_id: int, db: Session = Depends(get_db)):
+def htmx_delete(transcription_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     t = transcription_service.get_transcription(db, transcription_id)
     if t:
+        _check_owner(t, current_user)
         from app.models.transcription import TranscriptionSegment
         from pathlib import Path
         db.query(TranscriptionSegment).filter(
@@ -248,10 +286,12 @@ def htmx_retry(
     request: Request,
     transcription_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         return HTMLResponse("<p>ไม่พบข้อมูล</p>", status_code=404)
+    _check_owner(t, current_user)
 
     transcription_service.retry_transcription(db, t)
 
@@ -267,6 +307,7 @@ async def rename_speaker(
     transcription_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     from app.models.transcription import TranscriptionSegment
     body = await request.json()
@@ -279,6 +320,7 @@ async def rename_speaker(
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
 
     # Update segments
     segments = db.query(TranscriptionSegment).filter(
@@ -333,6 +375,7 @@ async def update_segment_speaker(
     segment_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     from app.models.transcription import TranscriptionSegment
     body = await request.json()
@@ -344,6 +387,11 @@ async def update_segment_speaker(
     if not seg:
         raise HTTPException(status_code=404, detail="Segment not found")
 
+    # Check owner via parent transcription
+    t = transcription_service.get_transcription(db, seg.transcription_id)
+    if t:
+        _check_owner(t, current_user)
+
     seg.speaker = new_speaker
     db.commit()
     return {"ok": True}
@@ -354,11 +402,13 @@ async def save_mom(
     transcription_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     body = await request.json()
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
     t.summary = body.get("summary", "")
     db.commit()
     return {"ok": True}
@@ -369,21 +419,36 @@ async def save_mom_full(
     transcription_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     body = await request.json()
     content = body.get("content", "")
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
 
     # Save full MoM as-is
     t.mom_full = content
 
-    # Also extract title if present
+    # Sync fields from MoM content
     import re
     title_match = re.search(r'\*\*หัวข้อ:\*\*\s*(.+)', content)
     if title_match:
         t.auto_title = title_match.group(1).strip()
+
+    # Extract summary (everything after ### สรุปภาพรวม until next ###)
+    summary_match = re.search(r'### สรุปภาพรวม\n(.*?)(?=\n### |\Z)', content, re.DOTALL)
+    if summary_match:
+        t.summary_short = summary_match.group(1).strip()[:200]
+
+    # Also save the non-info sections as summary
+    sections = content.split('### ')
+    mom_sections = []
+    for s in sections:
+        if s.strip() and not s.startswith('ข้อมูลการประชุม'):
+            mom_sections.append('### ' + s)
+    t.summary = '\n'.join(mom_sections).strip()
 
     db.commit()
     return {"ok": True}
@@ -394,6 +459,7 @@ async def replace_text(
     transcription_id: int,
     request: Request,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     from app.models.transcription import TranscriptionSegment, CorrectionDict
     body = await request.json()
@@ -402,10 +468,13 @@ async def replace_text(
 
     if not find:
         raise HTTPException(status_code=400, detail="Missing find text")
+    if not replace:
+        raise HTTPException(status_code=400, detail="กรุณาระบุข้อความที่ต้องการแก้ไข ไม่สามารถแทนที่ด้วยค่าว่างได้")
 
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
 
     count = 0
     # Replace in segments
@@ -424,24 +493,20 @@ async def replace_text(
         if val and find in val:
             setattr(t, field, val.replace(find, replace))
 
-    # Save to correction dictionary for future auto-correct
-    if replace:
-        existing = db.query(CorrectionDict).filter(CorrectionDict.wrong == find).first()
-        if existing:
-            existing.correct = replace
-        else:
-            db.add(CorrectionDict(wrong=find, correct=replace))
+    # Don't save to correction dictionary — this is a one-time fix for this file only
+    # Users can add permanent corrections via the Correction Dictionary page
 
     db.commit()
     return {"ok": True, "count": count}
 
 
 @router.post("/api/transcriptions/{transcription_id}/regenerate-mom")
-def regenerate_mom(transcription_id: int, db: Session = Depends(get_db)):
+def regenerate_mom(transcription_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import TranscriptionSegment
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
 
     segments = db.query(TranscriptionSegment).filter(
         TranscriptionSegment.transcription_id == transcription_id
@@ -499,14 +564,26 @@ def regenerate_mom(transcription_id: int, db: Session = Depends(get_db)):
 # --- Export DOCX ---
 
 @router.get("/api/transcriptions/{transcription_id}/export-docx")
-def export_docx(transcription_id: int, db: Session = Depends(get_db)):
+def export_docx(transcription_id: int, token: str = None, db: Session = Depends(get_db)):
     from app.models.transcription import TranscriptionSegment
     from fastapi.responses import FileResponse
     from app.services.docx_export import export_mom_docx
+    from app.core.security import decode_token
+
+    # Auth via query param (browser download can't send Bearer header)
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    username = decode_token(token)
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    current_user = db.query(User).filter(User.username == username).first()
+    if not current_user:
+        raise HTTPException(status_code=401, detail="User not found")
 
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
 
     segs = db.query(TranscriptionSegment).filter(
         TranscriptionSegment.transcription_id == transcription_id
@@ -522,13 +599,14 @@ def export_docx(transcription_id: int, db: Session = Depends(get_db)):
 # --- Apply Corrections API ---
 
 @router.post("/api/transcriptions/{transcription_id}/apply-corrections")
-def apply_corrections(transcription_id: int, db: Session = Depends(get_db)):
+def apply_corrections(transcription_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import TranscriptionSegment, CorrectionDict
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    _check_owner(t, current_user)
 
-    corrections = db.query(CorrectionDict).all()
+    corrections = db.query(CorrectionDict).filter(CorrectionDict.user_id == current_user.id).all()
     if not corrections:
         return {"ok": True, "count": 0}
 
@@ -561,12 +639,14 @@ def apply_corrections(transcription_id: int, db: Session = Depends(get_db)):
 # --- Speaker Profile API ---
 
 @router.get("/api/speakers")
-def list_speakers(db: Session = Depends(get_db)):
+def list_speakers(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
     profiles = db.query(SpeakerProfile).order_by(SpeakerProfile.nickname).all()
     return [{
         "id": p.id,
         "nickname": p.nickname,
+        "source": getattr(p, 'source', 'manual'),
+        "email": p.email or "",
         "full_name": p.full_name or "",
         "organization": p.organization or "",
         "department": p.department or "",
@@ -577,7 +657,7 @@ def list_speakers(db: Session = Depends(get_db)):
 
 
 @router.post("/api/speakers")
-async def create_speaker(request: Request, db: Session = Depends(get_db)):
+async def create_speaker(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
     body = await request.json()
     nickname = body.get("nickname", "").strip()
@@ -588,6 +668,7 @@ async def create_speaker(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=f"ชื่อ '{nickname}' มีอยู่แล้ว กรุณาใช้ชื่ออื่น")
     p = SpeakerProfile(
         nickname=nickname,
+        email=body.get("email", ""),
         full_name=body.get("full_name", ""),
         organization=body.get("organization", ""),
         department=body.get("department", ""),
@@ -600,14 +681,16 @@ async def create_speaker(request: Request, db: Session = Depends(get_db)):
 
 
 @router.put("/api/speakers/{speaker_id}")
-async def update_speaker(speaker_id: int, request: Request, db: Session = Depends(get_db)):
+async def update_speaker(speaker_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
     from datetime import datetime, timezone, timedelta
     body = await request.json()
     p = db.query(SpeakerProfile).filter(SpeakerProfile.id == speaker_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
-    for key in ["nickname", "full_name", "organization", "department", "position"]:
+    if getattr(p, 'source', 'manual') == 'ad':
+        raise HTTPException(status_code=403, detail="ข้อมูลพนักงานจาก AD ไม่สามารถแก้ไขได้")
+    for key in ["nickname", "email", "full_name", "organization", "department", "position"]:
         if key in body:
             if key == "nickname":
                 new_nick = body[key].strip()
@@ -622,11 +705,13 @@ async def update_speaker(speaker_id: int, request: Request, db: Session = Depend
 
 
 @router.delete("/api/speakers/{speaker_id}")
-def delete_speaker(speaker_id: int, db: Session = Depends(get_db)):
+def delete_speaker(speaker_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
     p = db.query(SpeakerProfile).filter(SpeakerProfile.id == speaker_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
+    if getattr(p, 'source', 'manual') == 'ad':
+        raise HTTPException(status_code=403, detail="ข้อมูลพนักงานจาก AD ไม่สามารถลบได้")
     db.delete(p)
     db.commit()
     return {"ok": True}
@@ -634,7 +719,7 @@ def delete_speaker(speaker_id: int, db: Session = Depends(get_db)):
 
 # Keep old endpoint for backward compatibility
 @router.get("/api/voiceprints")
-def list_voiceprints_api(db: Session = Depends(get_db)):
+def list_voiceprints_api(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
     profiles = db.query(SpeakerProfile).order_by(SpeakerProfile.nickname).all()
     return [{
@@ -649,7 +734,7 @@ def list_voiceprints_api(db: Session = Depends(get_db)):
 
 
 @router.put("/api/voiceprints/{speaker_name}")
-async def update_voiceprint_api(speaker_name: str, request: Request, db: Session = Depends(get_db)):
+async def update_voiceprint_api(speaker_name: str, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
     from datetime import datetime, timezone, timedelta
     body = await request.json()
@@ -667,7 +752,7 @@ async def update_voiceprint_api(speaker_name: str, request: Request, db: Session
 
 
 @router.delete("/api/voiceprints/{speaker_name}")
-def delete_voiceprint_api(speaker_name: str, db: Session = Depends(get_db)):
+def delete_voiceprint_api(speaker_name: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
     p = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == speaker_name).first()
     if not p:
@@ -680,31 +765,31 @@ def delete_voiceprint_api(speaker_name: str, db: Session = Depends(get_db)):
 # --- Correction Dictionary API ---
 
 @router.get("/api/corrections")
-def list_corrections(db: Session = Depends(get_db)):
+def list_corrections(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import CorrectionDict
-    items = db.query(CorrectionDict).order_by(CorrectionDict.created_at.desc()).all()
+    items = db.query(CorrectionDict).filter(CorrectionDict.user_id == current_user.id).order_by(CorrectionDict.created_at.desc()).all()
     return [{"id": c.id, "wrong": c.wrong, "correct": c.correct} for c in items]
 
 
 @router.post("/api/corrections")
-async def add_correction(request: Request, db: Session = Depends(get_db)):
+async def add_correction(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import CorrectionDict
     body = await request.json()
     wrong = body.get("wrong", "").strip()
     correct = body.get("correct", "").strip()
     if not wrong or not correct:
         raise HTTPException(status_code=400, detail="Missing wrong or correct")
-    existing = db.query(CorrectionDict).filter(CorrectionDict.wrong == wrong).first()
+    existing = db.query(CorrectionDict).filter(CorrectionDict.wrong == wrong, CorrectionDict.user_id == current_user.id).first()
     if existing:
         existing.correct = correct
     else:
-        db.add(CorrectionDict(wrong=wrong, correct=correct))
+        db.add(CorrectionDict(wrong=wrong, correct=correct, user_id=current_user.id))
     db.commit()
     return {"ok": True}
 
 
 @router.put("/api/corrections/{correction_id}")
-async def update_correction(correction_id: int, request: Request, db: Session = Depends(get_db)):
+async def update_correction(correction_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import CorrectionDict
     body = await request.json()
     c = db.query(CorrectionDict).filter(CorrectionDict.id == correction_id).first()
@@ -719,7 +804,7 @@ async def update_correction(correction_id: int, request: Request, db: Session = 
 
 
 @router.delete("/api/corrections/{correction_id}")
-def delete_correction(correction_id: int, db: Session = Depends(get_db)):
+def delete_correction(correction_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import CorrectionDict
     c = db.query(CorrectionDict).filter(CorrectionDict.id == correction_id).first()
     if not c:

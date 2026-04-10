@@ -110,14 +110,58 @@ def export_mom_docx(transcription, segments, db):
 
     doc.add_paragraph()
 
-    # ผู้เข้าร่วมประชุม
+    # ผู้เข้าร่วมประชุม (match with SpeakerProfile for real names)
+    from app.models.transcription import SpeakerProfile
+    profiles = {p.nickname: p for p in db.query(SpeakerProfile).all()}
+
     _add_styled_para(doc, "ผู้เข้าร่วมประชุม", bold=True, size=16, color=HEADER_COLOR, space_after=4)
+
+    # Build attendee list with real names
+    attendees = []
     for spk in speakers:
-        p = doc.add_paragraph(style="List Bullet")
-        p.paragraph_format.space_after = Pt(1)
-        run = p.add_run(spk)
-        run.font.name = "TH SarabunPSK"
-        run.font.size = Pt(14)
+        profile = profiles.get(spk)
+        if profile and profile.full_name:
+            name = profile.full_name
+            if profile.position:
+                name += f" ({profile.position})"
+            attendees.append(name)
+        else:
+            attendees.append(spk)
+
+    # Group by organization
+    org_groups = {}
+    for spk in speakers:
+        profile = profiles.get(spk)
+        org = (profile.organization if profile and profile.organization else "อื่นๆ")
+        if org not in org_groups:
+            org_groups[org] = []
+        if profile and profile.full_name:
+            entry = profile.full_name
+            if profile.position:
+                entry += f" ({profile.position})"
+        else:
+            entry = spk
+        org_groups[org].append(entry)
+
+    if len(org_groups) == 1 and list(org_groups.keys())[0] == "อื่นๆ":
+        # No org info — just list names
+        for name in attendees:
+            p = doc.add_paragraph(style="List Bullet")
+            p.paragraph_format.space_after = Pt(1)
+            run = p.add_run(name)
+            run.font.name = "TH SarabunPSK"
+            run.font.size = Pt(14)
+    else:
+        # Table: org | names
+        table = doc.add_table(rows=len(org_groups) + 1, cols=2)
+        table.style = "Table Grid"
+        _style_table_cell(table.rows[0].cells[0], "หน่วยงาน", bold=True, bg=LABEL_BG)
+        _style_table_cell(table.rows[0].cells[1], "รายชื่อ", bold=True, bg=LABEL_BG)
+        table.rows[0].cells[0].width = Cm(4)
+        for i, (org, names) in enumerate(org_groups.items()):
+            _style_table_cell(table.rows[i + 1].cells[0], org)
+            _style_table_cell(table.rows[i + 1].cells[1], "\n".join(names))
+            table.rows[i + 1].cells[0].width = Cm(4)
 
     doc.add_paragraph()
 

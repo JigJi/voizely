@@ -5,6 +5,7 @@ import TranscriptionPage from './pages/TranscriptionPage';
 import AudioConfigPage from './pages/AudioConfigPage';
 import SpeakerPage from './pages/SpeakerPage';
 import CorrectionPage from './pages/CorrectionPage';
+import MeetingPage from './pages/MeetingPage';
 import GroupSettingsPage from './pages/GroupSettingsPage';
 import UploadPage from './pages/UploadPage';
 import LandingPage from './pages/LandingPage';
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="/audio/:audioId/config" element={<AudioConfigPage />} />
           <Route path="/speakers" element={<SpeakerPage />} />
           <Route path="/corrections" element={<CorrectionPage />} />
+          <Route path="/meetings" element={<MeetingPage />} />
           <Route path="/groups/:groupId" element={<GroupSettingsPage />} />
         </Route>
       </Routes>

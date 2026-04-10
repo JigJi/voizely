@@ -5,34 +5,45 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.transcription import TranscriptionGroup, Transcription
+from app.models.user import User
+from app.routers.auth import get_current_user
 
 router = APIRouter(tags=["groups"])
 templates = Jinja2Templates(directory="app/templates")
 
 
 @router.get("/api/groups")
-def list_groups(db: Session = Depends(get_db)):
-    groups = db.query(TranscriptionGroup).order_by(TranscriptionGroup.sort_order).all()
+def list_groups(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    groups = (
+        db.query(TranscriptionGroup)
+        .filter(
+            (TranscriptionGroup.user_id == current_user.id) |
+            (TranscriptionGroup.user_id.is_(None)) |
+            (TranscriptionGroup.is_default == True)
+        )
+        .order_by(TranscriptionGroup.sort_order)
+        .all()
+    )
     return [
         {
             "id": g.id,
             "name": g.name,
             "custom_instructions": g.custom_instructions,
             "is_default": g.is_default,
-            "count": len(g.transcriptions),
+            "count": sum(1 for t in g.transcriptions if t.user_id == current_user.id),
         }
         for g in groups
     ]
 
 
 @router.post("/api/groups")
-async def create_group(request: Request, db: Session = Depends(get_db)):
+async def create_group(request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     body = await request.json()
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Missing name")
     max_order = db.query(TranscriptionGroup).count()
-    group = TranscriptionGroup(name=name, sort_order=max_order, custom_instructions=body.get("custom_instructions"))
+    group = TranscriptionGroup(name=name, sort_order=max_order, user_id=current_user.id, custom_instructions=body.get("custom_instructions"))
     db.add(group)
     db.commit()
     db.refresh(group)

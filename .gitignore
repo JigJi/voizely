@@ -4,7 +4,7 @@ __pycache__/
 .env
 *.db
 uploads/
-models/
+/models/
 .venv/
 node_modules/
 frontend/node_modules/
@@ -26,3 +26,10 @@ screenshots/
 experiments/
 test_*.html
 .wsl_host_ip
+
+# QA/test files
+qa_*.py
+qa_*.json
+test_*.py
+debug_*.py
+fix_*.py

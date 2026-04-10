@@ -117,9 +117,11 @@ def create_transcription(
     model_size: str = "Vinxscribe/biodatlab-whisper-th-large-v3-faster",
     initial_prompt: str | None = None,
     llm_provider: str | None = None,
+    user_id: int | None = None,
 ) -> Transcription:
     transcription = Transcription(
         audio_file_id=audio.id,
+        user_id=user_id,
         model_size=model_size,
         language=language,
         initial_prompt=initial_prompt,
@@ -392,24 +394,24 @@ def get_transcription_by_audio(db: Session, audio_id: int) -> Transcription | No
     )
 
 
-def get_all_transcriptions(db: Session) -> list[Transcription]:
-    return (
-        db.query(Transcription)
-        .order_by(Transcription.created_at.desc())
-        .all()
-    )
+def get_all_transcriptions(db: Session, user_id: int | None = None) -> list[Transcription]:
+    q = db.query(Transcription)
+    if user_id is not None:
+        q = q.filter(Transcription.user_id == user_id)
+    return q.order_by(Transcription.created_at.desc()).all()
 
 
-def get_grouped_transcriptions(db: Session):
+def get_grouped_transcriptions(db: Session, user_id: int | None = None):
     """Return groups with their transcriptions for sidebar."""
     from app.models.transcription import TranscriptionGroup
-    # Non-default groups: newest first
-    custom_groups = (
-        db.query(TranscriptionGroup)
-        .filter(TranscriptionGroup.is_default == False)
-        .order_by(TranscriptionGroup.created_at.desc())
-        .all()
-    )
+    # Non-default groups: filter by user, newest first
+    q_groups = db.query(TranscriptionGroup).filter(TranscriptionGroup.is_default == False)
+    if user_id is not None:
+        q_groups = q_groups.filter(
+            (TranscriptionGroup.user_id == user_id) |
+            (TranscriptionGroup.user_id.is_(None))
+        )
+    custom_groups = q_groups.order_by(TranscriptionGroup.created_at.desc()).all()
     # Default group always last
     default_group = (
         db.query(TranscriptionGroup)
@@ -417,16 +419,23 @@ def get_grouped_transcriptions(db: Session):
         .first()
     )
     # Ungrouped transcriptions
-    ungrouped = (
-        db.query(Transcription)
-        .filter(Transcription.group_id.is_(None))
-        .order_by(Transcription.created_at.desc())
-        .all()
-    )
+    q_ungrouped = db.query(Transcription).filter(Transcription.group_id.is_(None))
+    if user_id is not None:
+        q_ungrouped = q_ungrouped.filter(Transcription.user_id == user_id)
+    ungrouped = q_ungrouped.order_by(Transcription.created_at.desc()).all()
+
     result = []
     for g in custom_groups:
-        result.append({"group": g, "transcriptions": list(g.transcriptions)})
+        if user_id is not None:
+            items = [t for t in g.transcriptions if t.user_id == user_id]
+        else:
+            items = list(g.transcriptions)
+        result.append({"group": g, "transcriptions": items})
     if default_group:
-        items = list(default_group.transcriptions) + ungrouped
+        if user_id is not None:
+            grouped_items = [t for t in default_group.transcriptions if t.user_id == user_id]
+        else:
+            grouped_items = list(default_group.transcriptions)
+        items = grouped_items + ungrouped
         result.append({"group": default_group, "transcriptions": items})
     return result

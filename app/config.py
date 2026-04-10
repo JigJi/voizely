@@ -29,9 +29,20 @@ class Settings(BaseSettings):
     HF_TOKEN: str = ""
     GEMINI_API_KEY: str = ""
     DEEPGRAM_API_KEY: str = ""
+    ASSEMBLYAI_API_KEY: str = ""
+
+    # MS Teams Integration
+    MS_TEAMS_ENABLED: bool = False
+    MS_TEAMS_TENANT_ID: str = ""
+    MS_TEAMS_CLIENT_ID: str = ""
+    MS_TEAMS_CLIENT_SECRET: str = ""
+    MS_TEAMS_POLL_USERS: str = ""  # comma-separated emails
+    MS_TEAMS_POLL_INTERVAL: int = 60  # seconds
+    MS_TEAMS_RECORDING_MODEL: str = "deepgram+gemini"
+    MS_TEAMS_DEFAULT_LANGUAGE: str = "th"
 
     # Auth
-    SECRET_KEY: str = "speech-text-secret-change-me"
+    SECRET_KEY: str = "d94328f901d98ced4782f2064204ed9db848c8d247b268a678ddb682886f193e"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440  # 24 hours
     AD_ENABLED: bool = False
@@ -40,7 +51,7 @@ class Settings(BaseSettings):
     AD_BASE_DN: str = ""
     # Fixed user (when AD_ENABLED=False)
     FIXED_USERNAME: str = "admin"
-    FIXED_PASSWORD: str = "admin"
+    FIXED_PASSWORD: str = ""
 
     model_config = {"env_file": ".env"}
 

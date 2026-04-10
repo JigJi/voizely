@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { Upload, Plus, ChevronDown, Settings, Check, X, Loader2, Users, BookOpen, Trash2 } from 'lucide-react';
+import { Upload, Plus, ChevronDown, Settings, Check, X, Loader2, Users, BookOpen, Trash2, Video } from 'lucide-react';
 import { deleteTranscription } from '../api';
 import { getGroups, getTranscriptions, createGroup } from '../api';
 import Modal from './Modal';
@@ -145,6 +145,9 @@ export default function Sidebar() {
 
       {/* Bottom nav */}
       <div className="border-t border-[#e5e7eb] p-2">
+        <Link to="/meetings" className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-[#6b7280] hover:text-[#374151] hover:bg-[#f3f4f6] rounded-md transition-all">
+          <Video className="w-4 h-4" /> Meetings
+        </Link>
         <Link to="/speakers" className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-[#6b7280] hover:text-[#374151] hover:bg-[#f3f4f6] rounded-md transition-all">
           <Users className="w-4 h-4" /> Speaker
         </Link>

@@ -65,6 +65,13 @@ export const getVoiceprints = () => request('/api/voiceprints');
 export const updateVoiceprint = (name, data) => request(`/api/voiceprints/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteVoiceprint = (name) => request(`/api/voiceprints/${encodeURIComponent(name)}`, { method: 'DELETE' });
 
+// Meetings
+export const getMeetings = () => request('/api/meetings');
+export const processMeeting = (id, groupId, modelSize) => request(`/api/meetings/${id}/process`, { method: 'POST', body: JSON.stringify({ group_id: groupId, model_size: modelSize }) });
+export const retryMeeting = (id) => request(`/api/meetings/${id}/retry`, { method: 'POST' });
+export const skipMeeting = (id) => request(`/api/meetings/${id}/skip`, { method: 'POST' });
+export const deleteMeeting = (id) => request(`/api/meetings/${id}`, { method: 'DELETE' });
+
 // Corrections
 export const getCorrections = () => request('/api/corrections');
 export const addCorrection = (wrong, correct) => request('/api/corrections', { method: 'POST', body: JSON.stringify({ wrong, correct }) });

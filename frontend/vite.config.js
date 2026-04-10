@@ -6,8 +6,8 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': 'http://127.0.0.1:8801',
-      '/htmx': 'http://127.0.0.1:8801',
+      '/api': 'http://127.0.0.1:8800',
+      '/htmx': 'http://127.0.0.1:8800',
     },
   },
 })

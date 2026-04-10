@@ -58,8 +58,9 @@ export default function SpeakerPage() {
         <thead>
           <tr className="border-b border-[#e5e7eb] text-left">
             <th className="py-2 px-3 font-medium text-[#6b7280] w-8">ID</th>
-            <th className="py-2 px-3 font-medium text-[#6b7280]">ชื่อเล่น</th>
+            <th className="py-2 px-3 font-medium text-[#6b7280]">ชื่อเรียก</th>
             <th className="py-2 px-3 font-medium text-[#6b7280]">ชื่อ-สกุล</th>
+            <th className="py-2 px-3 font-medium text-[#6b7280]">อีเมล</th>
             <th className="py-2 px-3 font-medium text-[#6b7280]">หน่วยงาน</th>
             <th className="py-2 px-3 font-medium text-[#6b7280]">แผนก</th>
             <th className="py-2 px-3 font-medium text-[#6b7280]">ตำแหน่ง</th>
@@ -73,6 +74,7 @@ export default function SpeakerPage() {
               <td className="py-2 px-3 text-[#9ca3af] text-xs">{s.id}</td>
               <td className="py-2 px-3"><EditableCell value={s.nickname} onSave={v => handleEdit(s.id, 'nickname', v)} /></td>
               <td className="py-2 px-3"><EditableCell value={s.full_name} onSave={v => handleEdit(s.id, 'full_name', v)} /></td>
+              <td className="py-2 px-3"><EditableCell value={s.email} onSave={v => handleEdit(s.id, 'email', v)} /></td>
               <td className="py-2 px-3"><EditableCell value={s.organization} onSave={v => handleEdit(s.id, 'organization', v)} /></td>
               <td className="py-2 px-3"><EditableCell value={s.department} onSave={v => handleEdit(s.id, 'department', v)} /></td>
               <td className="py-2 px-3"><EditableCell value={s.position} onSave={v => handleEdit(s.id, 'position', v)} /></td>
@@ -85,7 +87,7 @@ export default function SpeakerPage() {
             </tr>
           ))}
           {!speakers.length && (
-            <tr><td colSpan="8" className="py-8 text-center text-[#9ca3af]">ยังไม่มีผู้พูด</td></tr>
+            <tr><td colSpan="9" className="py-8 text-center text-[#9ca3af]">ยังไม่มีผู้พูด</td></tr>
           )}
         </tbody>
       </table>
@@ -94,7 +96,7 @@ export default function SpeakerPage() {
         <Modal title="ลบผู้พูด" message={`ลบ "${deleteTarget.nickname}" (ID: ${deleteTarget.id})?`} okText="ลบ" danger onConfirm={handleDelete} onCancel={() => setDeleteTarget(null)} />
       )}
       {showNew && (
-        <Modal title="เพิ่มผู้พูดใหม่" type="prompt" placeholder="ชื่อเล่น" okText="เพิ่ม" onConfirm={handleCreate} onCancel={() => setShowNew(false)} />
+        <Modal title="เพิ่มผู้พูดใหม่" type="prompt" placeholder="ชื่อเรียก" okText="เพิ่ม" onConfirm={handleCreate} onCancel={() => setShowNew(false)} />
       )}
     </div>
   );

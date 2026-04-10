@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileAudio } from 'lucide-react';
 import { getGroups } from '../api';
+import { getToken } from '../lib/auth';
 
 export default function UploadPage() {
   const [file, setFile] = useState(null);
@@ -27,7 +28,7 @@ export default function UploadPage() {
       // Step 1: Upload
       const uploadForm = new FormData();
       uploadForm.append('file', file);
-      const uploadRes = await fetch('/htmx/upload', { method: 'POST', body: uploadForm });
+      const uploadRes = await fetch('/htmx/upload', { method: 'POST', body: uploadForm, headers: { Authorization: `Bearer ${getToken()}` } });
       const text = await uploadRes.text();
       const match = text.match(/audio\/(\d+)/);
       const redirect = uploadRes.headers.get('HX-Redirect');
@@ -38,7 +39,7 @@ export default function UploadPage() {
       // Step 2: Start with config
       const startForm = new FormData();
       Object.entries(form).forEach(([k, v]) => startForm.append(k, v));
-      const startRes = await fetch(`/api/audio/${audioId}/start`, { method: 'POST', body: startForm });
+      const startRes = await fetch(`/api/audio/${audioId}/start`, { method: 'POST', body: startForm, headers: { Authorization: `Bearer ${getToken()}` } });
 
       // Navigate to transcription
       if (startRes.redirected) {
@@ -103,6 +104,7 @@ export default function UploadPage() {
             <select value={form.diarization_model} onChange={e => setForm({ ...form, diarization_model: e.target.value })}
               className="w-full px-3 py-2.5 border border-[#d1d5db] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]">
               <option value="deepgram">Deepgram Nova-3 (API)</option>
+              <option value="spectral">Spectral Clustering (Deepgram + Local GPU)</option>
               <option value="pyannote">Pyannote (Local GPU)</option>
               <option value="gemini">Gemini 2.5 Flash (API)</option>
               <option value="gpt">GPT-4o (API)</option>

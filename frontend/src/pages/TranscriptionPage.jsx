@@ -12,7 +12,7 @@ const SPEAKER_COLORS = ['#2563eb', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '
 export default function TranscriptionPage() {
   const { id } = useParams();
   const [data, setData] = useState(null);
-  const [tab, setTab] = useState('summary');
+  const [tab, setTab] = useState('timeline');
   const [loading, setLoading] = useState(true);
   const [showMom, setShowMom] = useState(false);
   const [showFindReplace, setShowFindReplace] = useState(false);
@@ -42,7 +42,7 @@ export default function TranscriptionPage() {
 
   if (loading) return <div className="flex items-center justify-center h-full text-[#9ca3af]">กำลังโหลด...</div>;
   if (!data) return <div className="flex items-center justify-center h-full text-[#ef4444]">ไม่พบข้อมูล</div>;
-  if (data.status === 'pending' || data.status === 'in_progress') return <ProgressSteps progress={data.progress_percent || 0} />;
+  if (data.status === 'pending' || data.status === 'in_progress') return <ProgressSteps progress={data.progress_percent || 0} statusMessage={data.status_message || ''} />;
   if (data.status === 'failed') return (
     <div className="flex items-center justify-center h-full">
       <div className="text-center">
@@ -62,8 +62,8 @@ export default function TranscriptionPage() {
   });
 
   const tabs = [
-    { key: 'summary', label: 'Summary' },
     { key: 'timeline', label: 'Timeline' },
+    { key: 'summary', label: 'Summary' },
   ];
 
   return (
@@ -205,7 +205,7 @@ export default function TranscriptionPage() {
             <div className="pt-4 border-t border-[#e5e7eb]">
               <div className="text-xs font-medium text-[#9ca3af] mb-1">ค่าใช้จ่าย</div>
               <div className="space-y-1.5 text-xs">
-                <div className="flex justify-between"><span className="text-[#9ca3af]">{data.model_size?.split('+')[0] === 'deepgram' ? 'Deepgram' : 'Pyannote'}</span><span>{((data.deepgram_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
+                <div className="flex justify-between"><span className="text-[#9ca3af]">{{'deepgram': 'Deepgram', 'spectral': 'Deepgram + Spectral', 'pyannote': 'Pyannote', 'gemini': 'Gemini'}[data.model_size?.split('+')[0]] || data.model_size?.split('+')[0]}</span><span>{((data.deepgram_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
                 <div className="flex justify-between"><span className="text-[#9ca3af]">Gemini</span><span>{((data.gemini_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
                 <div className="flex justify-between font-medium border-t border-[#e5e7eb] pt-1 mt-1"><span>รวม</span><span>{((data.total_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
               </div>
@@ -444,7 +444,7 @@ function SpeakerDropdown({ name, onSelect }) {
               <div className="flex gap-1">
                 <input autoFocus value={newName} onChange={e => { setNewName(e.target.value); setNewError(''); }}
                   onKeyDown={e => { if (e.key === 'Enter') handleNewSpeaker(); if (e.key === 'Escape') { setShowNew(false); setNewName(''); setNewError(''); } }}
-                  placeholder="ชื่อเล่น"
+                  placeholder="ชื่อเรียก"
                   className={`min-w-0 flex-1 px-2 py-1 text-xs border rounded focus:outline-none ${newError ? 'border-[#ef4444]' : 'border-[#d1d5db] focus:border-[#2563eb]'}`} />
                 <button onClick={handleNewSpeaker} className="px-1.5 py-1 text-[10px] bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] shrink-0">ตกลง</button>
               </div>
