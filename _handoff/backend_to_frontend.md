@@ -245,3 +245,97 @@ shape ตรงกับที่ frontend request ทุก field
 รอคุณทำ Tailscale setup เสร็จแล้ว report Funnel URL กลับมาผมจะ test end-to-end แล้วก็ update status เป็น `DONE`
 
 ถ้ามีอะไรต้องปรับแก้ contract หรือ response shape บอกก่อน commit ได้เลย
+
+---
+
+## [2026-04-10 19:00] FROM: backend
+
+User ทำ Tailscale setup + restart backend เสร็จแล้ว ทดสอบ end-to-end ผ่านหมด
+
+### 🌐 Backend Public URL
+
+```
+https://voizely-backend.tailb8d083.ts.net
+```
+
+(Tailscale Funnel, HTTPS, auto cert — ใช้ได้ทันที)
+
+### Test results (จาก backend host เรียก funnel URL)
+
+**1. Health check — ✅ PASS**
+```bash
+curl https://voizely-backend.tailb8d083.ts.net/api/health
+# → {"status":"ok","service":"voizely-backend"}
+```
+
+**2. ad-verify with valid key — ✅ PASS**
+```bash
+curl -X POST https://voizely-backend.tailb8d083.ts.net/api/auth/ad-verify \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-API-Key: <KEY>" \
+  -d '{"username":"jirawat.sa","email":"jirawat.sa@appworks.co.th","first_name":"จิรวัฒน์","last_name":"สุขใจ","department":"BD","organization":"Appworks","ad_source":"Appworks"}'
+# → 200 + {"access_token":"eyJ...","token_type":"bearer","user":{"username":"jirawat.sa","first_name":"จิรวัฒน์",...,"role":"ADMIN"}}
+```
+user upsert ลง DB สำเร็จ, JWT ออกแล้ว, speaker_profile sync ด้วย source=`ad`
+
+**3. Invalid API key — ✅ PASS**
+```
+→ 401 {"detail":"Invalid API key"}
+```
+
+**4. Rate limit (10/min) — ✅ PASS**
+```
+Req 1-8:  401 (invalid key, but rate limit ยังไม่ถึง)
+Req 9+:   429 (Rate limit exceeded)
+```
+หมายเหตุ: rate limit apply หลัง pydantic validation pass (ถ้า body malformed จะได้ 422 ตลอด ไม่โดน rate limit) — ถ้าต้องการ rate limit ก่อน validation บอกได้
+
+**5. Audit log — ✅ PASS**
+ไฟล์ `logs/auth_audit.log` เก็บครบ:
+```
+2026-04-10 16:32:20 ad_verify.success ip=100.105.182.33 username=jirawat.sa ad_source=Appworks
+2026-04-10 16:32:30 ad_verify.rejected reason=invalid_api_key ip=100.105.182.33 username=test
+...
+```
+IP ที่บันทึกคือ Tailscale mesh IP (100.x.x.x) ของ client ที่เรียก — เหมาะใช้ตาม audit ภายใน tailnet
+
+### สิ่งที่ frontend ควรทำต่อ
+
+1. **เขียน `frontend_auth` service** (FastAPI port 8810 หรือที่ไหนก็ได้ local)
+2. **ldap3 bind AD บริษัท A** (ตามแบบ smart_e_gp — Appworks 172.20.0.101 + iWired 192.168.0.14)
+3. **หลัง bind สำเร็จ** ดึง profile แล้ว call:
+   ```
+   POST https://voizely-backend.tailb8d083.ts.net/api/auth/ad-verify
+   Headers:
+     Content-Type: application/json
+     X-Internal-API-Key: <copy จาก backend .env>
+   Body:
+     {username, email, first_name, last_name, department, organization, ad_source}
+   ```
+4. **Return JWT** ที่ได้จาก backend ให้ browser (ใช้ shape เดียวกันกับที่ React's LoginPage.jsx expect)
+5. **nginx proxy config:**
+   ```nginx
+   location /api/auth/login {
+     proxy_pass http://127.0.0.1:8810;  # frontend_auth local
+   }
+   location /api/ {
+     proxy_pass https://voizely-backend.tailb8d083.ts.net;  # backend Tailscale Funnel
+     proxy_ssl_server_name on;
+   }
+   ```
+
+### ค่าที่ frontend ต้องใช้
+
+- **BACKEND_PUBLIC_URL**: `https://voizely-backend.tailb8d083.ts.net` (public ใส่ในไฟล์ได้)
+- **INTERNAL_API_KEY**: hex 64 ตัว **เก็บใน backend `.env`** — user ต้อง copy ค่าไปใส่ที่ `frontend_auth/.env` ด้วยตัวเอง (ผมไม่ paste ในไฟล์ handoff ตามกฎ)
+- **AD bind config**: เหมือน smart_e_gp เป๊ะ — 2 AD servers (Appworks + iWired)
+
+### Commit
+
+commit ล่าสุด: `9816bc2 Add /api/auth/ad-verify endpoint for frontend_auth service`
+
+code พร้อมแล้ว rate limit + audit log + refactor ครบ คุณ pull ล่าสุดแล้ว implement `frontend_auth/` ต่อได้เลย
+
+### Status
+
+จะ update เป็น `WAITING_FRONTEND`
