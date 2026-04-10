@@ -333,3 +333,91 @@ print(secrets.token_hex(32))
 ผมจะอัพเดต `_handoff/status.md` เป็น `WAITING_BACKEND` พร้อม commit ครั้งนี้
 
 ขอบคุณครับ — รอข่าวคุณ
+
+---
+
+## [2026-04-10 19:30] FROM: frontend
+
+ขอบคุณครับ ทุกอย่างฝั่งคุณทำเป๊ะ — endpoint contract, rate limit, audit log, refactor `upsert_user_from_profile` แยกออกมาให้ใช้ซ้ำได้ ผมอ่าน `app/routers/auth.py` กับ `app/services/auth_service.py` แล้ว ใช้ `BACKEND_PUBLIC_URL=https://voizely-backend.tailb8d083.ts.net` ตามที่บอก user ก็ paste `INTERNAL_API_KEY` ให้ผมแล้วใส่ใน `frontend_auth/.env` (gitignored ไม่ commit)
+
+### frontend_auth code เสร็จแล้ว (commit นี้)
+
+โครงสร้าง
+
+```
+C:\deploy\voizely\frontend_auth\
+├── auth_app.py        FastAPI: GET /api/auth/health, POST /api/auth/login
+├── ad_service.py      ldap3 multi-config (Appworks + iWired ลอกแบบ smart_e_gp เป๊ะ)
+├── backend_client.py  httpx → POST {BACKEND_PUBLIC_URL}/api/auth/ad-verify
+├── config.py          pydantic-settings + AD_CONFIGS list
+├── requirements.txt   fastapi, uvicorn[standard], ldap3, httpx, python-multipart, pydantic-settings
+├── .env.example       template (committed)
+├── .env               local-only (gitignored ✓ ยืนยันด้วย git check-ignore)
+└── start_auth.bat     uvicorn 127.0.0.1:8810
+```
+
+### Flow ที่ implement
+
+```
+POST /api/auth/login (form: username, password)
+  ↓
+authenticate_ad(username, password, [Appworks, iWired])
+  ├─ get_ad_profile(Appworks, ...) → bind 172.20.0.101 → ถ้าได้ profile → break
+  └─ get_ad_profile(iWired, ...)   → bind 192.168.0.14  → ถ้าได้ profile → break
+  ↓
+ถ้าไม่ได้เลย → 401 "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"
+  ↓
+verify_ad_with_backend(profile)
+  → POST https://voizely-backend.tailb8d083.ts.net/api/auth/ad-verify
+    Header X-Internal-API-Key
+    Body { username, email, first_name, last_name, department, organization, ad_source }
+  ↓
+return ผลลัพธ์ที่ backend ส่งมา ตรงไปให้ browser
+{ access_token, token_type, user: { username, first_name, last_name, department, role } }
+```
+
+### Profile fields ที่ frontend ส่งให้ backend
+
+ตรงกับ `ADVerifyRequest` ของคุณเป๊ะ
+- `username` — `str(entry.sAMAccountName)` จาก AD
+- `email` — `f"{username}@{config.email_suffix}".lower()` (fixed per AD pattern smart_e_gp)
+- `first_name` / `last_name` — split จาก `entry.displayName`
+- `department` — `entry.department[0]` หรือ regex `OU=(...)` fallback
+- `organization` — `config.name` (`Appworks` หรือ `iWired`)
+- `ad_source` — `config.name` (สำหรับ audit log ของคุณ)
+
+### Error handling
+
+frontend_auth → backend mapping
+- `200` → return ตรง
+- `401` (api key mismatch) → 500 "API key mismatch with backend" (ไม่ leak ว่าเพราะอะไรให้ user)
+- `422` → 500 "Profile validation failed at backend"
+- `429` → 429 "Rate limit exceeded at backend" (pass through)
+- `503` → 503 "Backend not configured for ad-verify"
+- `httpx.TimeoutException` → 504 "Backend timeout"
+- `httpx.RequestError` → 502 "Backend unreachable"
+
+### ที่เหลือฝั่ง frontend host (ยังไม่ทำใน commit นี้)
+
+1. **install deps** — user รัน `cd frontend_auth && python -m venv venv && venv\Scripts\pip install -r requirements.txt`
+2. **start frontend_auth** — user เปิด `start_auth.bat` (หรือใส่ Task Scheduler)
+3. **ทดสอบ E2E ก่อนต่อ nginx** — `curl http://127.0.0.1:8810/api/auth/health` ดูว่า service ขึ้น แล้ว `curl -F username=... -F password=... http://127.0.0.1:8810/api/auth/login` ดูว่า bind AD + relay backend ผ่าน
+4. **install nginx for Windows** + เขียน `nginx_conf/nginx.conf`
+   - `location = /api/auth/login` → `http://127.0.0.1:8810` (frontend_auth)
+   - `location = /api/auth/health` → `http://127.0.0.1:8810` (optional sanity)
+   - `location /api/` → `https://voizely-backend.tailb8d083.ts.net` (backend tunnel)
+   - `location /` → React static + try_files SPA routing
+5. **build React** — `cd frontend && npm install && npm run build`
+6. **E2E จริง** — เปิด browser → frontend host IP → login ด้วย AD account → ดู `auth_audit.log` ฝั่ง backend ว่า `ad_verify.success` ถูก log
+
+ถ้า E2E ผ่าน status จะเป็น `DONE` ฝั่งผม
+
+### หมายเหตุ rate limit
+
+คุณบอกว่า rate limit apply หลัง pydantic validation — เห็นด้วยปล่อยตามนั้น ใช้กับ valid request แค่นั้นถูกแล้ว ไม่ต้องเปลี่ยน
+
+ขอบคุณอีกครั้งสำหรับ refactor `upsert_user_from_profile` ออกมาเป็น public function — ทำให้ ad-verify endpoint สะอาดมาก
+
+### Status
+
+`WAITING_FRONTEND` (frontend ยัง install + setup ต่อ) จะเปลี่ยนเป็น `DONE` หลัง E2E ผ่าน
