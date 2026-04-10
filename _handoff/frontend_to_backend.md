@@ -421,3 +421,125 @@ frontend_auth → backend mapping
 ### Status
 
 `WAITING_FRONTEND` (frontend ยัง install + setup ต่อ) จะเปลี่ยนเป็น `DONE` หลัง E2E ผ่าน
+
+---
+
+## [2026-04-10 20:00] FROM: frontend
+
+frontend deploy เสร็จเกือบหมด
+
+- frontend_auth :8810 รันผ่าน Task Scheduler bat (kill+loop pattern) ✅
+- nginx :3100 (เปลี่ยนจาก 3000 เพราะ smart_e_gp ใช้อยู่) — daemon off + loop ✅
+- backend tunnel proxy ผ่าน nginx ทดสอบ `/api/health` 200 จากเครื่อง frontend ✅
+- React static + SPA fallback ทดสอบ `/` กับ `/meetings` 200 ✅
+- E2E จาก browser ทดสอบจริงด้วย AD account 2 คน
+
+### ❗ พบ bug — ขอช่วย debug
+
+**Test 1: `jirawat.sa` (user เอง) — PASS ✅**
+
+```
+17:36:20 AD attempt: Appworks (jirawat.sa)
+17:36:20 AD success: Jirawat Sangthong (jirawat.sa@appworks.co.th, dept=Business Development)
+17:36:24 POST .../api/auth/ad-verify → 200 OK
+17:36:24 login ok: jirawat.sa (Appworks)
+```
+
+flow ครบ JWT ออก browser เข้าหน้าหลักได้
+
+**Test 2: `sarunyu.su` — FAIL ที่ฝั่งคุณ ❌**
+
+```
+17:37:41 AD attempt: Appworks (sarunyu.su)
+17:37:41 AD success: Sarunyu Suksawasdi (sarunyu.su@appworks.co.th, dept=Operations)
+17:37:43 POST .../api/auth/ad-verify → 500 Internal Server Error
+17:37:43 backend_client: backend unexpected status 500: {"detail":"Failed to upsert user"}
+```
+
+frontend_auth ส่งไปถูก (httpx log ยืนยัน POST ที่ tunnel URL) — backend ตอบ 500 พร้อม `{"detail": "Failed to upsert user"}` ซึ่งมาจาก except branch ของ ad_verify endpoint
+
+```python
+try:
+    user = upsert_user_from_profile(db, profile)
+except Exception as e:
+    _audit("ad_verify.error", ip=client_ip, username=body.username, error=str(e)[:100])
+    raise HTTPException(status_code=500, detail="Failed to upsert user")
+```
+
+`upsert_user_from_profile` ของคุณโยน exception แต่ frontend มองไม่เห็น exception จริง
+
+### ขอข้อมูล 4 อย่างเพื่อ debug
+
+1. **บรรทัด `ad_verify.error` ใน `backend/logs/auth_audit.log`** สำหรับ username `sarunyu.su` (น่าจะมี timestamp ราวๆ 17:37:43) ใน format
+
+   ```
+   YYYY-MM-DD HH:MM:SS ad_verify.error ip=... username=sarunyu.su error=<exception 100 ตัวแรก>
+   ```
+
+   paste มาตรงๆ เลย
+
+2. **State ใน `users` table** สำหรับ sarunyu.su
+
+   ```sql
+   SELECT id, username, email, first_name, last_name, department, role, is_active, last_login_at, created_at
+   FROM users WHERE username = 'sarunyu.su';
+   ```
+
+   ถ้ามี row อยู่แล้ว → อาจชนกับการ update
+   ถ้าไม่มี → อาจ fail ที่การ insert
+
+3. **State ใน `speaker_profiles` table** สำหรับคนนี้
+
+   ```sql
+   SELECT id, nickname, source, email, full_name, organization, department
+   FROM speaker_profiles
+   WHERE email = 'sarunyu.su@appworks.co.th' OR nickname IN ('Sarunyu', 'sarunyu.su');
+   ```
+
+4. **ทดสอบ jirawat.sa ฝั่งคุณตรงๆ** — เพื่อยืนยันว่า upsert path OK สำหรับ user ที่มี row อยู่แล้ว และ test กับ sarunyu.su ในรูปแบบเดียวกัน
+
+   ```bash
+   curl -X POST https://voizely-backend.tailb8d083.ts.net/api/auth/ad-verify \
+     -H "Content-Type: application/json" \
+     -H "X-Internal-API-Key: <key>" \
+     -d '{"username":"sarunyu.su","email":"sarunyu.su@appworks.co.th","first_name":"Sarunyu","last_name":"Suksawasdi","department":"Operations","organization":"Appworks","ad_source":"Appworks"}'
+   ```
+
+   จะเห็น response 500 + error จริงใน log
+
+### สมมติฐานที่ผมคิดได้
+
+ดูจาก `app/services/auth_service.py:upsert_user_from_profile` ที่คุณ refactor มา
+
+```python
+def upsert_user_from_profile(db, profile):
+    user = db.query(User).filter(User.username == profile["username"]).first()
+    if not user:
+        user = User(username=..., email=..., ...)
+        db.add(user)
+    else:
+        if new_email and "@local" not in new_email:
+            user.email = new_email
+        ...
+    user.last_login_at = datetime.now(...)
+    db.commit()    # ← น่าจะ raise ตรงนี้
+    db.refresh(user)
+    if email and "@local" not in email:
+        _sync_speaker_profile(db, profile)
+    return user
+```
+
+candidate causes
+- **a) Unique violation `username`** — ถ้ามี row sarunyu.su อยู่แล้ว query จะ filter เจอ ไม่ควรชน — ตัดไปได้
+- **b) Length overflow** — `email` String(255), `department` String(255), `first_name`/`last_name` String(100) — `Sarunyu Suksawasdi` 18 chars, `Operations` 10 chars — ไม่น่าเกิน
+- **c) Encoding** — ถ้ามี character non-ascii หลุดเข้ามา (smart_e_gp pattern ส่ง displayName ภาษาไทยได้) อาจเป็นปัญหา PostgreSQL encoding — แต่ Sarunyu Suksawasdi เป็น ASCII ทั้งหมด ตัดไป
+- **d) Stale session / DB connection ขาด** — uvicorn worker ค้าง connection จาก request ก่อนหน้า — เป็นไปได้แต่ Test 1 jirawat.sa ผ่าน
+- **e) `_sync_speaker_profile` exception ที่ไม่ catch** — function มี try/except แต่ถ้า nickname collision logic ที่ใช้ db.query แล้ว auto-flush dirty `user` ก่อน commit อาจเจอ partial state issue
+- **f) `created_at` default callable** — ใช้ `lambda: datetime.now(...)` SQLAlchemy รับได้ ไม่น่า fail
+- **g) ของจริงคือ exception อื่นที่ผมเดาไม่ออก** ← ต้องดู audit log
+
+ผมเดาว่าน่าจะเป็น **d** หรือ **e** มากสุด ถ้าเห็น error message จริงคงรู้ทันที
+
+### Status
+
+`WAITING_BACKEND` รอคุณ paste audit log + DB state กลับมา

@@ -1,6 +1,6 @@
 # Handoff Status
 
-**Current:** `WAITING_FRONTEND`
+**Current:** `WAITING_BACKEND`
 
 ## History
 
@@ -10,3 +10,4 @@
 - [2026-04-10 18:00] backend: implement `/api/health` + `/api/auth/ad-verify` + rate limit + audit log + refactor upsert_user_from_profile + INTERNAL_API_KEY ใน .env + AD_ENABLED=False รอ user install Tailscale Funnel + restart backend + ถ่าย INTERNAL_API_KEY ไป frontend → `BLOCKED_USER`
 - [2026-04-10 19:00] backend: Tailscale Funnel up (https://voizely-backend.tailb8d083.ts.net), E2E test ผ่านหมด (health, ad-verify valid/invalid key, rate limit, audit log) frontend implement frontend_auth ต่อได้เลย → `WAITING_FRONTEND`
 - [2026-04-10 19:30] frontend: implemented frontend_auth/ (auth_app, ad_service, backend_client, config) ลอก smart_e_gp AD pattern, .env gitignored พร้อม INTERNAL_API_KEY ที่ user ถ่ายมาให้ ยังเหลือ install deps + nginx + build React + E2E → `WAITING_FRONTEND`
+- [2026-04-10 20:00] frontend: nginx 1.28.3 + frontend_auth + npm build เสร็จ E2E จาก browser ผ่านสำหรับ jirawat.sa แต่ sarunyu.su fail ที่ backend `upsert_user_from_profile` (500 "Failed to upsert user") AD bind ผ่านทั้ง 2 คน — bug อยู่ฝั่ง backend ขอ audit log + DB state เพื่อ debug → `WAITING_BACKEND`
