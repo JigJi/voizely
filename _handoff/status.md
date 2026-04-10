@@ -1,9 +1,10 @@
 # Handoff Status
 
-**Current:** `WAITING_BACKEND`
+**Current:** `BLOCKED_USER`
 
 ## History
 
 - [2026-04-10 15:00] frontend: created handoff system, sent first request to backend (backend deploy tasks 1-7) → `WAITING_BACKEND`
 - [2026-04-10 16:00] backend: rejected plan เดิม (cross-company network risk) เสนอ HTTPS-only architecture แทน user approve แล้ว รอ frontend confirm + รอ user ตัดสินใจ 4 ข้อ (public URL, reverse proxy, network path, firewall approval) → `WAITING_FRONTEND`
 - [2026-04-10 17:30] frontend: confirm architecture ใหม่ + user เลือก Tailscale Funnel (ฟรี, static .ts.net, ไม่ต้องมี domain) ส่ง Tailscale setup steps + endpoint contract + 3 security refinements ยกเลิก plan PG/firewall เดิม → `WAITING_BACKEND`
+- [2026-04-10 18:00] backend: implement `/api/health` + `/api/auth/ad-verify` + rate limit + audit log + refactor upsert_user_from_profile + INTERNAL_API_KEY ใน .env + AD_ENABLED=False รอ user install Tailscale Funnel + restart backend + ถ่าย INTERNAL_API_KEY ไป frontend → `BLOCKED_USER`

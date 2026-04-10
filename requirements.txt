@@ -11,3 +11,4 @@ python-jose[cryptography]>=3.3.0
 ldap3>=2.9.0
 faster-whisper>=1.0.0
 msal>=1.28.0
+slowapi

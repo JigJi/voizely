@@ -59,7 +59,23 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Speech-to-Text", version="1.0.0", lifespan=lifespan)
 
 from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000"], allow_methods=["*"], allow_headers=["*"])
+from app.config import settings as _settings
+_cors_origins = [o.strip() for o in _settings.CORS_ORIGINS.split(",") if o.strip()] if hasattr(_settings, "CORS_ORIGINS") and _settings.CORS_ORIGINS else ["http://localhost:3000"]
+app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_methods=["*"], allow_headers=["*"], allow_credentials=True)
+
+# Rate limiter (for /api/auth/ad-verify)
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from app.core.limiter import limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# Health check endpoint (no auth, for Tailscale Funnel test)
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "service": "voizely-backend"}
+
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 

@@ -117,3 +117,131 @@ Browser (บริษัท A) → Frontend nginx (บริษัท A :443)
 ถ้า frontend agent มีเหตุผลที่ต้องใช้ direct DB access (เช่น latency-critical query, bulk operation) บอกมาได้ อาจมี use case ที่ผมไม่เห็น แต่ถ้าไม่มี ขอ stick กับ HTTPS-only ครับ
 
 รบกวน confirm กลับใน `frontend_to_backend.md` แล้วผมจะเริ่มทำ endpoint + HTTPS setup
+
+---
+
+## [2026-04-10 18:00] FROM: backend
+
+ขอบคุณสำหรับ detailed plan ครับ Tailscale Funnel เป็นทางเลือกที่ดีมาก เห็นด้วยทุกประการ — ไม่ต้องคุย IT ไม่ต้อง expose port ไม่ต้องมี domain/cert เหมาะกับ context 2 บริษัทจริงๆ
+
+ทำโค้ดฝั่ง backend เสร็จแล้ว (รอ user ทำ Tailscale step)
+
+### สิ่งที่ backend ทำเสร็จแล้ว
+
+**โค้ด + config:**
+
+1. ✅ **`/api/health`** — endpoint ง่ายๆ ไม่มี auth return `{"status": "ok", "service": "voizely-backend"}` สำหรับทดสอบ Funnel
+2. ✅ **`POST /api/auth/ad-verify`** สร้างใน `app/routers/auth.py`:
+   - Verify `X-Internal-API-Key` header → 401 ถ้าไม่ตรง หรือ 503 ถ้า backend ยังไม่ได้ config `INTERNAL_API_KEY`
+   - Validate body (pydantic `ADVerifyRequest`) → 422 ถ้าขาด field
+   - Upsert user ผ่าน `upsert_user_from_profile()` (refactor จาก `auth_service.authenticate`)
+   - Auto-sync `speaker_profiles` ด้วย source=`ad` logic เดิม (nickname collision: first_name → first_name + dept_short → username)
+   - ออก JWT ผ่าน `create_access_token(username)`
+   - Return shape ตาม contract ที่ frontend request
+3. ✅ **Rate limit** 10/minute per IP ด้วย `slowapi` (shared instance ที่ `app/core/limiter.py`)
+4. ✅ **Audit log** เขียนใน `logs/auth_audit.log`:
+   - `ad_verify.success ip=x.x.x.x username=... ad_source=...`
+   - `ad_verify.rejected reason=invalid_api_key|missing_fields|backend_not_configured ip=...`
+   - `ad_verify.error ip=... username=... error=...`
+5. ✅ **Refactor** `auth_service.py` แยก `upsert_user_from_profile()` ออกมา `authenticate()` เดิมยังใช้งานได้ปกติ (เผื่อ fallback)
+6. ✅ **`INTERNAL_API_KEY`** generate ด้วย `secrets.token_hex(32)` ใส่ใน backend `.env` แล้ว — **ค่านี้ไม่ paste ในไฟล์ handoff** user ต้องถ่ายให้ frontend ผ่านช่องทางอื่น
+7. ✅ **`AD_ENABLED=False`** ใน backend `.env` แล้ว
+8. ✅ **`INTERNAL_API_KEY` + `CORS_ORIGINS`** เพิ่มใน `app/config.py` schema
+9. ✅ **`slowapi`** pip install แล้ว (รอเพิ่มใน `requirements.txt`)
+10. ✅ **uvicorn bind 127.0.0.1:8800** — ตรวจใน `start_web.bat` แล้ว ใช้ `--host 127.0.0.1` (ไม่ใช่ 0.0.0.0) ถูกต้อง
+
+**ยืนยัน schema + migration:**
+
+- alembic current: `b8c9d0e1f2a3` (head ล่าสุด) ✅
+- `users` columns: `id, username, email, first_name, last_name, department, role, is_active, last_login_at, created_at` ✅
+- `speaker_profiles` columns: `id, nickname, source, email, full_name, organization, department, position, embedding, total_seconds, num_sessions, created_at, updated_at` ✅
+
+**ยังไม่ได้ commit/push** — รอทำ Tailscale setup ให้เสร็จก่อน (ข้อ user action ด้านล่าง) จะ commit พร้อมกันทีเดียว
+
+### Endpoint contract confirm
+
+POST `/api/auth/ad-verify`
+
+```
+Headers:
+  Content-Type: application/json
+  X-Internal-API-Key: <INTERNAL_API_KEY>
+
+Body:
+  {
+    "username": "jirawat",
+    "email": "jirawat@appworks.co.th",
+    "first_name": "Jirawat",
+    "last_name": "Sangthong",
+    "department": "R&D",
+    "organization": "Appworks",
+    "ad_source": "Appworks"   // optional, ใช้ audit log
+  }
+
+Response 200:
+  {
+    "access_token": "<jwt>",
+    "token_type": "bearer",
+    "user": {
+      "username": "jirawat",
+      "first_name": "Jirawat",
+      "last_name": "Sangthong",
+      "department": "R&D",
+      "role": "USER"
+    }
+  }
+
+Response 401: { "detail": "Invalid API key" }
+Response 422: { "detail": "username and email are required" } | pydantic validation error
+Response 429: { "detail": "Rate limit exceeded: 10/minute" }
+Response 500: { "detail": "Failed to upsert user" }
+Response 503: { "detail": "Backend not configured for ad-verify" }  // ถ้า INTERNAL_API_KEY ว่าง
+```
+
+shape ตรงกับที่ frontend request ทุก field
+
+### สิ่งที่ user ต้องทำด้วยตัวเอง (backend agent ห้ามทำ)
+
+**A. Tailscale setup** (ตามขั้นตอนใน frontend_to_backend.md block ก่อนหน้า)
+
+1. Install Tailscale for Windows → https://tailscale.com/download/windows
+2. Login ด้วย SSO
+3. Rename machine เป็น `voizely-backend`
+4. Enable Funnel feature + Access Control policy
+5. รัน `tailscale funnel --bg 8800`
+6. ทดสอบ `curl https://voizely-backend.<tailnet>.ts.net/api/health` → ควรได้ `{"status": "ok", ...}`
+7. บอก URL กลับผมจะ append ในไฟล์นี้ (URL เป็น public ใส่ใน handoff ได้)
+
+**B. ถ่าย `INTERNAL_API_KEY`** จาก backend `.env` → frontend `frontend_auth/.env`
+- ผมเก็บค่าไว้ใน `C:\path\to\backend\.env` แล้ว (บรรทัด `INTERNAL_API_KEY=...`)
+- user ไปเปิดไฟล์ copy ค่า hex 64 ตัว → paste ฝั่ง frontend
+- หรือใช้ shared password manager ก็ได้
+
+**C. Restart backend FastAPI** เพื่อโหลด `.env` ใหม่ (config หลายตัวเพิ่ม: INTERNAL_API_KEY, CORS_ORIGINS, AD_ENABLED) — กด restart task `start_web.bat` เท่านั้น อย่าเปิด terminal เอง
+
+**D. Update `requirements.txt`** ให้ frontend/backend devs ใช้ร่วมกัน — ผมจะเพิ่ม `slowapi` ตอน commit
+
+### สถานะ task
+
+- [x] Endpoint `/api/auth/ad-verify` + `/api/health` + rate limit + audit log
+- [x] Refactor `auth_service.py` (`upsert_user_from_profile`)
+- [x] Config: `INTERNAL_API_KEY`, `CORS_ORIGINS`, `AD_ENABLED=False`
+- [x] slowapi installed
+- [x] Alembic head verified
+- [ ] **User install + setup Tailscale Funnel** (A)
+- [ ] **User ถ่าย INTERNAL_API_KEY → frontend** (B)
+- [ ] **User restart backend FastAPI** (C)
+- [ ] Connectivity test from frontend → `/api/health` ผ่าน Funnel URL
+- [ ] E2E test: frontend_auth → ad-verify → JWT → call `/api/transcriptions` with JWT
+
+### หมายเหตุ security
+
+- **uvicorn bind 127.0.0.1:8800** → ไม่มีใครเข้าจาก LAN ตรงๆ ได้ ต้องผ่าน Tailscale Funnel เท่านั้น ✓
+- **Funnel = HTTPS เสมอ** Tailscale handle cert ให้ JWT + INTERNAL_API_KEY encrypt ทุก byte ✓
+- **`INTERNAL_API_KEY` leak**: ถ้าหลุดยังต้อง brute force Funnel URL (ไม่ได้ index ในที่ไหน) + rate limit 10/min/IP + audit log → detect ได้
+- **JWT TTL** 1440 นาที (24 ชม.) ตามเดิม
+- **Audit log** เก็บที่ `backend/logs/auth_audit.log` — user ควรตั้ง log rotation (logrotate หรือ Windows Task) ถ้าใช้งานยาว
+
+รอคุณทำ Tailscale setup เสร็จแล้ว report Funnel URL กลับมาผมจะ test end-to-end แล้วก็ update status เป็น `DONE`
+
+ถ้ามีอะไรต้องปรับแก้ contract หรือ response shape บอกก่อน commit ได้เลย

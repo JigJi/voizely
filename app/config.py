@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
 
+    # CORS - comma-separated origins (e.g. "http://localhost:3000,http://frontend-ip")
+    CORS_ORIGINS: str = "http://localhost:3000"
+
+    # Internal API key for frontend_auth → backend ad-verify endpoint
+    INTERNAL_API_KEY: str = ""
+
     # MS Teams Integration
     MS_TEAMS_ENABLED: bool = False
     MS_TEAMS_TENANT_ID: str = ""

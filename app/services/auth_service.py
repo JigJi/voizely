@@ -22,7 +22,11 @@ def authenticate(username: str, password: str, db: Session) -> User | None:
     if not profile:
         return None
 
-    # Upsert user in DB
+    return upsert_user_from_profile(db, profile)
+
+
+def upsert_user_from_profile(db: Session, profile: dict) -> User:
+    """Upsert user record from AD/external profile + sync SpeakerProfile if AD source."""
     user = db.query(User).filter(User.username == profile["username"]).first()
     if not user:
         user = User(
@@ -34,7 +38,6 @@ def authenticate(username: str, password: str, db: Session) -> User | None:
         )
         db.add(user)
     else:
-        # Update profile fields only if new value is meaningful (not @local placeholder)
         new_email = profile.get("email", "")
         if new_email and "@local" not in new_email:
             user.email = new_email
@@ -49,8 +52,9 @@ def authenticate(username: str, password: str, db: Session) -> User | None:
     db.commit()
     db.refresh(user)
 
-    # Auto-sync SpeakerProfile from AD user
-    if settings.AD_ENABLED and profile.get("email") and "@local" not in profile.get("email", ""):
+    # Auto-sync SpeakerProfile if profile has real email (not @local placeholder)
+    email = profile.get("email", "")
+    if email and "@local" not in email:
         _sync_speaker_profile(db, profile)
 
     return user
