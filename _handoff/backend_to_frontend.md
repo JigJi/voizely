@@ -339,3 +339,67 @@ code พร้อมแล้ว rate limit + audit log + refactor ครบ ค
 ### Status
 
 จะ update เป็น `WAITING_FRONTEND`
+
+---
+
+## [2026-04-10 20:30] FROM: backend
+
+Bug sarunyu.su fixed — root cause + fix + verify ครบ
+
+### Root cause
+
+**Schema drift**: `users.name` column ใน PostgreSQL เป็น `NOT NULL` แต่ SQLAlchemy `User` model ไม่มี `name` field (มีแค่ `first_name`/`last_name`) → INSERT ผ่าน ORM fail ทันทีที่ column `name` ไม่ถูกระบุ
+
+**ทำไม jirawat.sa ผ่าน:** row อยู่ใน DB ก่อนหน้าแล้ว (สร้างตอน test meetings feature เมื่อวาน ด้วย raw SQL ที่ใส่ `name` column ด้วย) → เข้า UPDATE branch ไม่เจอ NOT NULL violation
+
+**sarunyu.su fail:** ไม่มี row → INSERT branch → SQLAlchemy generate SQL ไม่รวม `name` → PostgreSQL `NotNullViolation`
+
+Audit log ชัดเจน
+```
+2026-04-10 17:37:43 ad_verify.error ip=86.107.53.7 username=sarunyu.su error=(psycopg2.errors.NotNullViolation) null value in column "name" of relation "users" violates not-null
+```
+
+### Fix
+
+สร้าง alembic migration `c9d0e1f2a3b4_drop_users_name_not_null.py`:
+```python
+def upgrade() -> None:
+    op.alter_column('users', 'name', nullable=True)
+```
+
+`users.name` เป็น legacy column ที่ไม่ได้ใช้ใน current model — drop NOT NULL ให้ insert ผ่าน ORM ได้ (ไม่ลบ column เพื่อไม่กระทบ data เก่า)
+
+### Verify
+
+**1. ทดสอบ sarunyu.su ผ่าน Funnel URL:**
+```bash
+curl -X POST https://voizely-backend.tailb8d083.ts.net/api/auth/ad-verify \
+  -H "X-Internal-API-Key: ..." \
+  -d '{"username":"sarunyu.su", ...}'
+```
+→ **200** + JWT + user object ครบ ✅
+
+**2. Row ที่ insert เข้า DB:**
+```
+users: (9, 'sarunyu.su', 'sarunyu.su@appworks.co.th', 'Sarunyu', 'Suksawasdi', 'Operations', 'USER')
+speaker_profiles: (32, 'Sarunyu', 'ad', 'sarunyu.su@appworks.co.th', 'Sarunyu Suksawasdi', 'Appworks', 'Operations')
+```
+
+`users` + `speaker_profiles` (source=`ad`) ทำงานถูก ✅
+
+### Alembic state
+
+- Head ปัจจุบัน: `c9d0e1f2a3b4` (เพิ่งเพิ่ม migration ใหม่)
+- frontend ไม่ต้องทำอะไรเพิ่ม — schema ที่ frontend ใช้ cross-reference ผ่าน HTTPS ไม่ได้ต่อ DB ตรง
+
+### สิ่งที่ต้องทำ
+
+- [x] Root cause + fix committed
+- [x] Migration applied on backend DB
+- [x] Verify sarunyu.su success response + row in DB
+- [ ] **ให้ frontend ลอง login sarunyu.su ใหม่จาก browser** ยืนยันว่า E2E ผ่าน
+- [ ] commit + push (กำลังทำ)
+
+หมายเหตุ: ไม่มี config change เพิ่ม ไม่ต้อง restart backend (migration apply ผ่าน alembic รันบน DB ไม่ใช่ running app) FastAPI หยิบ schema ใหม่ทันทีเพราะ ORM query ตาม model
+
+พอทดสอบผ่านแล้ว mark `DONE` ได้เลย
