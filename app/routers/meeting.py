@@ -557,6 +557,13 @@ def _meeting_to_dict(m: MeetingRecording, db: Session) -> dict:
         except (json.JSONDecodeError, TypeError):
             pass
 
+    processed_by_name = None
+    if m.processed_by:
+        u = db.query(User).filter(User.id == m.processed_by).first()
+        if u:
+            full = f"{u.first_name or ''} {u.last_name or ''}".strip()
+            processed_by_name = full or u.username
+
     return {
         "id": m.id,
         "platform": m.platform,
@@ -572,5 +579,6 @@ def _meeting_to_dict(m: MeetingRecording, db: Session) -> dict:
         "file_name": metadata.get("file_name"),
         "discovered_at": m.discovered_at.isoformat() if m.discovered_at else None,
         "processed_by": m.processed_by,
+        "processed_by_name": processed_by_name,
         "error_message": m.error_message,
     }

@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Trash2, RefreshCw, RotateCcw, CheckCircle, XCircle, Clock, Download, Loader2, Users } from 'lucide-react';
-import { getMeetings, processMeeting, retryMeeting, deleteMeeting, getGroups } from '../api';
-import Modal from '../components/Modal';
+import { Play, RefreshCw, RotateCcw, CheckCircle, XCircle, Clock, Download, Loader2, Users } from 'lucide-react';
+import { getMeetings, processMeeting, retranscribeMeeting, retryMeeting, getGroups } from '../api';
 import { notify } from '../components/Notification';
 
 const STATUS_MAP = {
@@ -23,10 +22,10 @@ function formatDate(isoStr) {
 export default function MeetingPage() {
   const [meetings, setMeetings] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [deleteTarget, setDeleteTarget] = useState(null);
   const [processTarget, setProcessTarget] = useState(null);
+  const [processMode, setProcessMode] = useState('process');
   const [selectedGroup, setSelectedGroup] = useState('');
-  const [selectedDiarization, setSelectedDiarization] = useState('spectral');
+  const [selectedDiarization, setSelectedDiarization] = useState('smart');
   const [selectedTranscription, setSelectedTranscription] = useState('gemini');
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
@@ -46,13 +45,15 @@ export default function MeetingPage() {
   async function handleProcess() {
     if (!processTarget) return;
     try {
-      const res = await processMeeting(processTarget.id, selectedGroup || null, `${selectedDiarization}+${selectedTranscription}`);
+      const modelSize = `${selectedDiarization}+${selectedTranscription}`;
+      const apiCall = processMode === 'retranscribe' ? retranscribeMeeting : processMeeting;
+      const res = await apiCall(processTarget.id, selectedGroup || null, modelSize);
       setProcessTarget(null);
       setSelectedGroup('');
-      setSelectedDiarization('spectral');
+      setSelectedDiarization('smart');
       setSelectedTranscription('gemini');
       if (res.transcription_id) {
-        notify('เริ่มถอดเสียงแล้ว');
+        notify(processMode === 'retranscribe' ? 'เริ่มถอดเสียงใหม่แล้ว' : 'เริ่มถอดเสียงแล้ว');
         navigate(`/transcriptions/${res.transcription_id}`);
       } else {
         notify('กำลังดาวน์โหลดไฟล์... รอสักครู่แล้วกดรีเฟรช');
@@ -64,20 +65,20 @@ export default function MeetingPage() {
     }
   }
 
+  function openProcessModal(m, mode) {
+    setProcessTarget(m);
+    setProcessMode(mode);
+    setSelectedGroup('');
+    setSelectedDiarization('smart');
+    setSelectedTranscription('gemini');
+  }
+
   async function handleRetry(id) {
     try {
       await retryMeeting(id);
       notify('กำลังลองใหม่');
       load();
     } catch (e) { notify(e.message, 'error'); }
-  }
-
-  async function handleDelete() {
-    if (!deleteTarget) return;
-    await deleteMeeting(deleteTarget.id);
-    setDeleteTarget(null);
-    notify('ลบแล้ว');
-    load();
   }
 
   const platformIcon = (p) => p === 'teams' ? '🟦' : p === 'zoom' ? '🟪' : '🟩';
@@ -123,6 +124,9 @@ export default function MeetingPage() {
                       <span>{m.meeting_organizer}</span>
                       <span>{formatDate(m.meeting_start_time || m.discovered_at)}</span>
                       {m.file_size_mb && <span>{m.file_size_mb} MB</span>}
+                      {m.processed_by_name && (
+                        <span className="text-[#6b7280]">ถอดโดย {m.processed_by_name}</span>
+                      )}
                       {m.transcription_status && m.transcription_status !== 'completed' && (
                         <span className="text-[#8b5cf6]">{Math.round(m.transcription_progress || 0)}%</span>
                       )}
@@ -140,13 +144,19 @@ export default function MeetingPage() {
 
                   <div className="flex items-center gap-1 ml-3 shrink-0">
                     {m.transcription_id && m.transcription_status === 'completed' && (
-                      <button onClick={() => navigate(`/transcriptions/${m.transcription_id}`)}
-                        className="px-3 py-1.5 text-xs bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] transition-colors">
-                        ดูผล
-                      </button>
+                      <>
+                        <button onClick={() => navigate(`/transcriptions/${m.transcription_id}`)}
+                          className="px-3 py-1.5 text-xs bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] transition-colors">
+                          ดูผล
+                        </button>
+                        <button onClick={async () => { const g = await getGroups(); setGroups(g); openProcessModal(m, 'retranscribe'); }}
+                          className="px-3 py-1.5 text-xs border border-[#d1d5db] text-[#374151] rounded hover:bg-[#f3f4f6] transition-colors">
+                          ถอดเสียงใหม่
+                        </button>
+                      </>
                     )}
                     {(m.status === 'discovered' || m.status === 'skipped') && (
-                      <button onClick={async () => { const g = await getGroups(); setGroups(g); setProcessTarget(m); setSelectedGroup(''); setSelectedDiarization('spectral'); setSelectedTranscription('gemini'); }}
+                      <button onClick={async () => { const g = await getGroups(); setGroups(g); openProcessModal(m, 'process'); }}
                         className="px-3 py-1.5 text-xs bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] transition-colors">
                         ถอดเสียง
                       </button>
@@ -157,10 +167,6 @@ export default function MeetingPage() {
                         <RotateCcw className="w-4 h-4" />
                       </button>
                     )}
-                    <button onClick={() => setDeleteTarget(m)} title="ลบ"
-                      className="p-1.5 text-[#9ca3af] hover:text-[#ef4444] transition-colors">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
                   </div>
                 </div>
               </div>
@@ -172,8 +178,11 @@ export default function MeetingPage() {
       {processTarget && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setProcessTarget(null)}>
           <div className="bg-white rounded-xl p-6 w-[400px] shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold mb-1">ถอดเสียง</h3>
+            <h3 className="font-semibold mb-1">{processMode === 'retranscribe' ? 'ถอดเสียงใหม่' : 'ถอดเสียง'}</h3>
             <p className="text-sm text-[#6b7280] mb-4">{processTarget.meeting_subject || 'recording'}</p>
+            {processMode === 'retranscribe' && (
+              <p className="text-xs text-[#f59e0b] mb-3">⚠️ ข้อมูลถอดเสียงและ MoM ปัจจุบันจะถูกเขียนทับ</p>
+            )}
             <div className="space-y-3 mb-4">
               <div>
                 <label className="block text-sm font-medium text-[#374151] mb-1">กลุ่ม</label>
@@ -189,6 +198,7 @@ export default function MeetingPage() {
                 <label className="block text-sm font-medium text-[#374151] mb-1">Diarization (แยกผู้พูด)</label>
                 <select value={selectedDiarization} onChange={e => setSelectedDiarization(e.target.value)}
                   className="w-full px-3 py-2 border border-[#d1d5db] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]">
+                  <option value="smart">อัตโนมัติ (แนะนำ)</option>
                   <option value="spectral">Spectral Clustering (Deepgram + Local GPU)</option>
                   <option value="deepgram">Deepgram Nova-3 (API)</option>
                   <option value="pyannote">Pyannote (Local GPU)</option>
@@ -205,14 +215,12 @@ export default function MeetingPage() {
             </div>
             <div className="flex justify-end gap-2">
               <button onClick={() => setProcessTarget(null)} className="px-4 py-2 text-sm text-[#6b7280] hover:bg-[#f3f4f6] rounded-lg">ยกเลิก</button>
-              <button onClick={handleProcess} className="px-4 py-2 text-sm bg-[#2563eb] text-white rounded-lg hover:bg-[#1d4ed8]">เริ่มถอดเสียง</button>
+              <button onClick={handleProcess} className="px-4 py-2 text-sm bg-[#2563eb] text-white rounded-lg hover:bg-[#1d4ed8]">
+                {processMode === 'retranscribe' ? 'เริ่มถอดเสียงใหม่' : 'เริ่มถอดเสียง'}
+              </button>
             </div>
           </div>
         </div>
-      )}
-
-      {deleteTarget && (
-        <Modal title="ลบรายการ" message={`ลบ "${deleteTarget.meeting_subject || 'recording'}"?`} okText="ลบ" danger onConfirm={handleDelete} onCancel={() => setDeleteTarget(null)} />
       )}
     </div>
   );
