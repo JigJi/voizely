@@ -26,6 +26,8 @@ AD_CONFIGS = [
         "domain_suffix": os.getenv("AD_APPWORKS_DOMAIN", "ais.local"),
         "email_suffix": os.getenv("AD_APPWORKS_EMAIL_SUFFIX", "appworks.co.th"),
         "base_dn": os.getenv("AD_APPWORKS_BASE", "DC=ais,DC=local"),
+        "bind_user": os.getenv("AD_APPWORKS_BIND_USER", ""),
+        "bind_password": os.getenv("AD_APPWORKS_BIND_PASSWORD", ""),
     },
     {
         "name": "iWired",
@@ -33,5 +35,7 @@ AD_CONFIGS = [
         "domain_suffix": os.getenv("AD_IWIRED_DOMAIN", "iwired.co.th"),
         "email_suffix": os.getenv("AD_IWIRED_EMAIL_SUFFIX", "iwired.co.th"),
         "base_dn": os.getenv("AD_IWIRED_BASE", "DC=iwired,DC=co,DC=th"),
+        "bind_user": os.getenv("AD_IWIRED_BIND_USER", ""),
+        "bind_password": os.getenv("AD_IWIRED_BIND_PASSWORD", ""),
     },
 ]
