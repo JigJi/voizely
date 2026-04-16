@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.database import SessionLocal
 from app.models.audio import AudioFile, AudioStatus
 from app.models.transcription import Transcription, TranscriptionStatus
-from app.routers import audio, auth, group, meeting, pages, transcription
+from app.routers import admin, audio, auth, group, meeting, pages, transcription
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,6 +85,7 @@ app.include_router(audio.router)
 app.include_router(transcription.router)
 app.include_router(group.router)
 app.include_router(meeting.router)
+app.include_router(admin.router)
 
 # --- SPA: serve React frontend from dist ---
 DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
