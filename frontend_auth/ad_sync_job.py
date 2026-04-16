@@ -48,18 +48,31 @@ def main() -> int:
         return 1
 
     all_users: list[dict] = []
+    synced_orgs: list[str] = []
+    skipped_orgs: list[str] = []
     for cfg in AD_CONFIGS:
+        if not cfg.get("bind_user") or not cfg.get("bind_password"):
+            logger.warning("%s: no bind credentials in .env — skipping", cfg["name"])
+            skipped_orgs.append(cfg["name"])
+            continue
         try:
             users = list_all_ad_users(cfg)
         except Exception as e:
-            logger.error("%s enumeration failed: %s", cfg["name"], e)
-            logger.error("Aborting sync — partial batch would mark real users as leavers")
-            return 1
+            logger.error("%s enumeration failed: %s — skipping this AD", cfg["name"], e)
+            skipped_orgs.append(cfg["name"])
+            continue
         all_users.extend(users)
+        synced_orgs.append(cfg["name"])
 
     if not all_users:
-        logger.error("No users collected from any AD — aborting to be safe")
+        logger.error("No users collected from any AD (synced=%s skipped=%s) — aborting",
+                     synced_orgs, skipped_orgs)
         return 1
+
+    if skipped_orgs:
+        logger.warning("Partial sync: including %s, skipping %s. Backend must scope "
+                       "leaver detection by organization — otherwise skipped-org users "
+                       "would wrongly be marked inactive.", synced_orgs, skipped_orgs)
 
     # De-duplicate by email (if a user somehow shows up in both ADs, keep first)
     seen = set()

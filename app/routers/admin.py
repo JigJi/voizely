@@ -141,18 +141,24 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
             ))
             created += 1
 
-    # Mark missing AD users inactive (leavers not present in this sync batch)
+    # Mark missing AD users inactive (leavers not present in this sync batch).
+    # If the batch is scoped to a single organization (e.g. only Appworks was
+    # synced because we don't have iWired credentials), only consider rows in
+    # that same organization — otherwise a partial sync would wrongly flag every
+    # other-org AD user as a leaver.
     marked_inactive = 0
     if incoming_emails:
-        missing = (
-            db.query(SpeakerProfile)
-            .filter(
-                SpeakerProfile.source == "ad",
-                SpeakerProfile.is_active == True,
-                ~SpeakerProfile.email.in_(incoming_emails),
-            )
-            .all()
+        batch_orgs = {(u.organization or "").strip() for u in body.users}
+        batch_orgs.discard("")
+        q = db.query(SpeakerProfile).filter(
+            SpeakerProfile.source == "ad",
+            SpeakerProfile.is_active == True,
+            ~SpeakerProfile.email.in_(incoming_emails),
         )
+        if len(batch_orgs) == 1:
+            only_org = next(iter(batch_orgs))
+            q = q.filter(SpeakerProfile.organization == only_org)
+        missing = q.all()
         for m in missing:
             m.is_active = False
             m.updated_at = now
