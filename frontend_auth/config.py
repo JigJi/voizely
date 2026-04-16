@@ -1,5 +1,14 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+# Explicitly load .env before AD_CONFIGS is built — AD_CONFIGS uses os.getenv
+# at import time, which runs before pydantic_settings loads the .env file for
+# the Settings class. Without this, standalone scripts (ad_sync_job.py) see
+# empty bind credentials even when .env has them.
+load_dotenv(Path(__file__).parent / ".env")
 
 
 class Settings(BaseSettings):
