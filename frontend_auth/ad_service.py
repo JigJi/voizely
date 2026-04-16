@@ -149,6 +149,15 @@ def list_all_ad_users(server_conf: dict) -> list[dict]:
             if not sam:
                 continue
 
+            # Filter out non-human accounts (guest/test/service/krbtgt/admin etc.)
+            # Heuristic: real employees have BOTH givenName and sn populated.
+            # AD accounts that are missing either are almost always service or
+            # placeholder accounts in this company's directory.
+            _first = (attrs.get("givenName") or "").strip()
+            _last = (attrs.get("sn") or "").strip()
+            if not _first or not _last:
+                continue
+
             mail = (attrs.get("mail") or "").strip().lower()
             if not mail:
                 # Fall back to {sam}@email_suffix so every user has a stable key
