@@ -44,35 +44,15 @@ class SyncADSpeakersResponse(BaseModel):
     marked_inactive: int
 
 
-def _shorten_department(dept: str) -> str:
-    """Shorten department to ≤4 char uppercase suffix for nickname collision resolution."""
-    if not dept:
-        return ""
-    dept = dept.strip()
-    if len(dept) <= 4 and " " not in dept:
-        return dept.upper()
-    words = dept.split()
-    if len(words) > 1:
-        initials = "".join(w[0].upper() for w in words if w and w[0].isalpha())
-        if initials:
-            return initials
-    return dept[:3].upper()
+def _ad_nickname(email: str, organization: str, db: Session, batch_nicks: set[str], exclude_id: int | None = None) -> str:
+    """Pick the nickname for an AD speaker.
 
-
-def _resolve_nickname(
-    db: Session,
-    desired: str,
-    dept: str,
-    email: str,
-    exclude_id: int | None = None,
-    batch_nicks: set[str] | None = None,
-) -> str:
-    """Pick a unique nickname for an AD speaker.
-    Avoids DB collisions AND collisions with other rows added earlier in the same batch.
-    Falls back to 'Name DEPT' → email local-part → 'local-part N'.
+    Default: email local-part (e.g. 'jirawat.sa') — these are AD usernames so unique
+    by construction across the company.
+    Collision fallback (rare — only if a manual profile already owns that nickname):
+    append the organization in parens, then a counter.
     """
-    batch_nicks = batch_nicks if batch_nicks is not None else set()
-    desired = (desired or "").strip() or email.split("@")[0]
+    base = email.split("@")[0].strip()
 
     def _taken(candidate: str) -> bool:
         if candidate in batch_nicks:
@@ -82,28 +62,20 @@ def _resolve_nickname(
             q = q.filter(SpeakerProfile.id != exclude_id)
         return q.first() is not None
 
-    if not _taken(desired):
-        return desired
+    if not _taken(base):
+        return base
 
-    dept_short = _shorten_department(dept)
-    if dept_short:
-        candidate = f"{desired} {dept_short}"
+    if organization:
+        candidate = f"{base} ({organization})"
         if not _taken(candidate):
             return candidate
 
-    # Fallback: email local-part — unique per AD user, but a manual profile could already own it
-    local = email.split("@")[0]
-    if not _taken(local):
-        return local
-
-    # Last resort: append a counter
     for n in range(2, 100):
-        c = f"{local} {n}"
-        if not _taken(c):
-            return c
+        candidate = f"{base} {n}"
+        if not _taken(candidate):
+            return candidate
 
-    # Shouldn't happen with sane data — let DB raise if it does
-    return local
+    return base  # let DB raise if we somehow hit this
 
 
 @router.post("/api/admin/sync-ad-speakers", response_model=SyncADSpeakersResponse)
@@ -127,7 +99,6 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
         incoming_emails.add(email)
 
         full_name = f"{u.first_name} {u.last_name}".strip() or u.display_name.strip()
-        nickname = u.display_name.strip() or u.first_name.strip() or email.split("@")[0]
 
         existing = db.query(SpeakerProfile).filter(SpeakerProfile.email == email).first()
 
@@ -136,11 +107,9 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
                 # Don't touch manual profiles — user owns these
                 continue
 
-            # Update fields from AD (AD is authoritative for 'ad' profiles)
-            wanted_nickname = _resolve_nickname(
-                db, nickname, u.department, email,
-                exclude_id=existing.id, batch_nicks=batch_nicks,
-            )
+            # Update fields from AD (AD is authoritative for 'ad' profiles).
+            # Nickname stays as the AD username (email local-part) — full_name carries the display name.
+            wanted_nickname = _ad_nickname(email, u.organization, db, batch_nicks, exclude_id=existing.id)
             if existing.nickname != wanted_nickname:
                 existing.nickname = wanted_nickname
             existing.full_name = full_name
@@ -155,9 +124,7 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
             batch_nicks.add(wanted_nickname)
             updated += 1
         else:
-            wanted_nickname = _resolve_nickname(
-                db, nickname, u.department, email, batch_nicks=batch_nicks,
-            )
+            wanted_nickname = _ad_nickname(email, u.organization, db, batch_nicks)
             db.add(SpeakerProfile(
                 nickname=wanted_nickname,
                 source="ad",
