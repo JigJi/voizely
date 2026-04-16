@@ -44,15 +44,24 @@ class SyncADSpeakersResponse(BaseModel):
     marked_inactive: int
 
 
-def _ad_nickname(email: str, organization: str, db: Session, batch_nicks: set[str], exclude_id: int | None = None) -> str:
+def _ad_nickname(
+    full_name: str,
+    email: str,
+    organization: str,
+    db: Session,
+    batch_nicks: set[str],
+    exclude_id: int | None = None,
+) -> str:
     """Pick the nickname for an AD speaker.
 
-    Default: email local-part (e.g. 'jirawat.sa') — these are AD usernames so unique
-    by construction across the company.
-    Collision fallback (rare — only if a manual profile already owns that nickname):
-    append the organization in parens, then a counter.
+    Use the person's real display name (e.g. 'Jirawat Sangthong') so it reads
+    naturally in MoM and action items. If two AD users share the same display
+    name, disambiguate by appending the AD username in parens, then the
+    organization, then a counter as last resort. Falls back to email local-part
+    only if there's no name at all.
     """
-    base = email.split("@")[0].strip()
+    username = email.split("@")[0].strip()
+    desired = (full_name or "").strip() or username
 
     def _taken(candidate: str) -> bool:
         if candidate in batch_nicks:
@@ -62,20 +71,26 @@ def _ad_nickname(email: str, organization: str, db: Session, batch_nicks: set[st
             q = q.filter(SpeakerProfile.id != exclude_id)
         return q.first() is not None
 
-    if not _taken(base):
-        return base
+    if not _taken(desired):
+        return desired
 
+    # Same display name as another AD user — append username
+    candidate = f"{desired} ({username})"
+    if not _taken(candidate):
+        return candidate
+
+    # Same username across orgs (somchai.s@appworks vs somchai.s@iwired)
     if organization:
-        candidate = f"{base} ({organization})"
+        candidate = f"{desired} ({username}@{organization})"
         if not _taken(candidate):
             return candidate
 
     for n in range(2, 100):
-        candidate = f"{base} {n}"
+        candidate = f"{desired} {n}"
         if not _taken(candidate):
             return candidate
 
-    return base  # let DB raise if we somehow hit this
+    return username  # let DB raise if we somehow hit this
 
 
 @router.post("/api/admin/sync-ad-speakers", response_model=SyncADSpeakersResponse)
@@ -108,8 +123,7 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
                 continue
 
             # Update fields from AD (AD is authoritative for 'ad' profiles).
-            # Nickname stays as the AD username (email local-part) — full_name carries the display name.
-            wanted_nickname = _ad_nickname(email, u.organization, db, batch_nicks, exclude_id=existing.id)
+            wanted_nickname = _ad_nickname(full_name, email, u.organization, db, batch_nicks, exclude_id=existing.id)
             if existing.nickname != wanted_nickname:
                 existing.nickname = wanted_nickname
             existing.full_name = full_name
@@ -124,7 +138,7 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
             batch_nicks.add(wanted_nickname)
             updated += 1
         else:
-            wanted_nickname = _ad_nickname(email, u.organization, db, batch_nicks)
+            wanted_nickname = _ad_nickname(full_name, email, u.organization, db, batch_nicks)
             db.add(SpeakerProfile(
                 nickname=wanted_nickname,
                 source="ad",
