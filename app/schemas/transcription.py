@@ -44,3 +44,4 @@ class TranscriptionProgress(BaseModel):
     status: TranscriptionStatus
     progress_percent: float
     processing_time_seconds: float | None
+    status_message: str | None = None

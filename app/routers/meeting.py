@@ -1,8 +1,10 @@
 import json
 import logging
+import os
 from datetime import datetime, date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -149,6 +151,31 @@ def get_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: Us
         if (m.meeting_subject or "").strip().lower() not in user_subjects:
             raise HTTPException(status_code=403, detail="Access denied")
     return _meeting_to_dict(m, db)
+
+
+@router.get("/api/meetings/{meeting_id}/download")
+def download_meeting_audio(meeting_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Download the audio file of a meeting recording. Access-controlled by calendar match."""
+    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    if not m:
+        raise HTTPException(status_code=404, detail="Not found")
+    if current_user.role != "ADMIN":
+        user_subjects = _get_user_meeting_subjects(db, current_user)
+        if (m.meeting_subject or "").strip().lower() not in user_subjects:
+            raise HTTPException(status_code=403, detail="Access denied")
+    if not m.audio_file_id:
+        raise HTTPException(status_code=400, detail="ยังไม่มีไฟล์เสียง")
+    audio = db.query(AudioFile).filter(AudioFile.id == m.audio_file_id).first()
+    if not audio or not audio.file_path or not os.path.exists(audio.file_path):
+        raise HTTPException(status_code=404, detail="ไฟล์เสียงถูกลบไปแล้ว")
+    subject = (m.meeting_subject or "recording").strip() or "recording"
+    ext = os.path.splitext(audio.original_filename or audio.file_path)[1] or ".mp4"
+    safe_name = "".join(c for c in subject if c not in '<>:"/\\|?*').strip()[:100] or "recording"
+    return FileResponse(
+        audio.file_path,
+        media_type=audio.mime_type or "application/octet-stream",
+        filename=f"{safe_name}{ext}",
+    )
 
 
 @router.post("/api/meetings/{meeting_id}/retranscribe")
@@ -572,6 +599,7 @@ def _meeting_to_dict(m: MeetingRecording, db: Session) -> dict:
         "attendees": attendees,
         "meeting_start_time": m.meeting_start_time.isoformat() if m.meeting_start_time else None,
         "status": m.status,
+        "audio_file_id": m.audio_file_id,
         "transcription_id": m.transcription_id,
         "transcription_status": transcription_status,
         "transcription_progress": transcription_progress,

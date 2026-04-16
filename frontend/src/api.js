@@ -69,6 +69,25 @@ export const deleteVoiceprint = (name) => request(`/api/voiceprints/${encodeURIC
 export const getMeetings = () => request('/api/meetings');
 export const processMeeting = (id, groupId, modelSize) => request(`/api/meetings/${id}/process`, { method: 'POST', body: JSON.stringify({ group_id: groupId, model_size: modelSize }) });
 export const retranscribeMeeting = (id, groupId, modelSize) => request(`/api/meetings/${id}/retranscribe`, { method: 'POST', body: JSON.stringify({ group_id: groupId, model_size: modelSize }) });
+export const downloadMeetingAudio = async (id, subject) => {
+  const res = await fetch(`/api/meetings/${id}/download`, { headers: authHeaders() });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try { const j = await res.json(); if (j.detail) detail = j.detail; } catch {}
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const disp = res.headers.get('Content-Disposition') || '';
+  const m = disp.match(/filename="?([^";]+)"?/);
+  a.download = m ? m[1] : `${(subject || 'recording').replace(/[<>:"/\\|?*]/g, '')}.mp4`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
 export const retryMeeting = (id) => request(`/api/meetings/${id}/retry`, { method: 'POST' });
 export const skipMeeting = (id) => request(`/api/meetings/${id}/skip`, { method: 'POST' });
 

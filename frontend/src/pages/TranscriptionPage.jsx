@@ -25,10 +25,10 @@ export default function TranscriptionPage() {
   useEffect(() => { loadData(); getGroups().then(setGroups); }, [id]);
 
   useEffect(() => {
-    if (!data || data.status === 'completed' || data.status === 'failed') return;
+    if (!data || data.status === 'completed') return;
     const interval = setInterval(async () => {
       const p = await getProgress(id);
-      if (p.status === 'completed') loadData();
+      if (p.status !== data.status) loadData();
       else setData(prev => prev ? { ...prev, ...p } : prev);
     }, 2000);
     return () => clearInterval(interval);

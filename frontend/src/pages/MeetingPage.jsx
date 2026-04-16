@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, RefreshCw, RotateCcw, CheckCircle, XCircle, Clock, Download, Loader2, Users } from 'lucide-react';
-import { getMeetings, processMeeting, retranscribeMeeting, retryMeeting, getGroups } from '../api';
+import { getMeetings, processMeeting, retranscribeMeeting, retryMeeting, getGroups, downloadMeetingAudio } from '../api';
 import { notify } from '../components/Notification';
 
 const STATUS_MAP = {
@@ -81,6 +81,15 @@ export default function MeetingPage() {
     } catch (e) { notify(e.message, 'error'); }
   }
 
+  async function handleDownload(m) {
+    try {
+      notify('กำลังดาวน์โหลด...');
+      await downloadMeetingAudio(m.id, m.meeting_subject);
+    } catch (e) {
+      notify(e.message || 'ดาวน์โหลดไม่สำเร็จ', 'error');
+    }
+  }
+
   const platformIcon = (p) => p === 'teams' ? '🟦' : p === 'zoom' ? '🟪' : '🟩';
 
   return (
@@ -154,6 +163,12 @@ export default function MeetingPage() {
                           ถอดเสียงใหม่
                         </button>
                       </>
+                    )}
+                    {m.audio_file_id && (
+                      <button onClick={() => handleDownload(m)} title="ดาวน์โหลดไฟล์เสียง"
+                        className="p-1.5 text-[#6b7280] hover:text-[#2563eb] transition-colors">
+                        <Download className="w-4 h-4" />
+                      </button>
                     )}
                     {(m.status === 'discovered' || m.status === 'skipped') && (
                       <button onClick={async () => { const g = await getGroups(); setGroups(g); openProcessModal(m, 'process'); }}

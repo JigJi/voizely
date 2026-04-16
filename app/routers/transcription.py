@@ -127,6 +127,7 @@ def get_progress(transcription_id: int, db: Session = Depends(get_db)):
         status=t.status,
         progress_percent=t.progress_percent,
         processing_time_seconds=t.processing_time_seconds,
+        status_message=t.status_message,
     )
 
 
