@@ -5,7 +5,7 @@ import { notify } from '../components/Notification';
 import ProgressSteps from '../components/ProgressSteps';
 import MomModal from '../tabs/MomModal';
 import Modal from '../components/Modal';
-import { Pencil } from 'lucide-react';
+import { Pencil, Loader2 } from 'lucide-react';
 
 const SPEAKER_COLORS = ['#2563eb', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6'];
 
@@ -20,6 +20,7 @@ export default function TranscriptionPage() {
   const [renameTarget, setRenameTarget] = useState(null);
   const [suggestedName, setSuggestedName] = useState('');
   const [suggestEdit, setSuggestEdit] = useState(null);
+  const [savingSpeaker, setSavingSpeaker] = useState(null);
   const audioRef = useRef();
 
   useEffect(() => { loadData(); getGroups().then(setGroups); }, [id]);
@@ -38,6 +39,25 @@ export default function TranscriptionPage() {
     setLoading(true);
     try { setData(await getTranscription(id)); } catch (e) { console.error(e); }
     setLoading(false);
+  }
+
+  async function loadDataSilent() {
+    try { setData(await getTranscription(id)); } catch (e) { console.error(e); }
+  }
+
+  async function handleRenameSpeaker(oldName, newName) {
+    if (!newName || newName === oldName) return;
+    if (savingSpeaker) return;
+    setSavingSpeaker(oldName);
+    try {
+      await renameSpeaker(id, oldName, newName);
+      notify(`เปลี่ยน ${oldName} → ${newName}`);
+      await loadDataSilent();
+    } catch (e) {
+      notify('บันทึกไม่สำเร็จ', 'error');
+    } finally {
+      setSavingSpeaker(null);
+    }
   }
 
   if (loading) return <div className="flex items-center justify-center h-full text-[#9ca3af]">กำลังโหลด...</div>;
@@ -165,9 +185,8 @@ export default function TranscriptionPage() {
                   {items.map(({ name, color, pct, suggest }) => (
                     <React.Fragment key={name}>
                       <div className="flex items-center gap-1 pr-2 whitespace-nowrap">
-                        <SpeakerDropdown name={name} onSelect={async (newName) => {
-                          if (newName && newName !== name) { await renameSpeaker(id, name, newName); notify(`เปลี่ยน ${name} → ${newName}`); loadData(); }
-                        }} />
+                        <SpeakerDropdown name={name} saving={savingSpeaker === name} disabled={!!savingSpeaker}
+                          onSelect={(newName) => handleRenameSpeaker(name, newName)} />
                         {suggest && (
                           <span className="px-1.5 py-0.5 rounded text-[10px]"
                             style={{ background: suggest.color + '18', color: suggest.color }}
@@ -217,7 +236,7 @@ export default function TranscriptionPage() {
       {showMom && <MomModal transcription={data} onClose={() => setShowMom(false)} onUpdate={loadData} />}
       {renameTarget && (
         <Modal title="เปลี่ยนชื่อผู้พูด" type="prompt" value={suggestedName || renameTarget} placeholder="ชื่อใหม่" okText="เปลี่ยน"
-          onConfirm={async (v) => { if (v && v !== renameTarget) { await renameSpeaker(id, renameTarget, v); notify('เปลี่ยนชื่อแล้ว'); loadData(); } setRenameTarget(null); setSuggestedName(''); }}
+          onConfirm={async (v) => { const target = renameTarget; setRenameTarget(null); setSuggestedName(''); if (v) await handleRenameSpeaker(target, v); }}
           onCancel={() => { setRenameTarget(null); setSuggestedName(''); }} />
       )}
     </div>
@@ -362,7 +381,7 @@ function InlineSuggestEdit({ value, onSave, onCancel }) {
   );
 }
 
-function SpeakerDropdown({ name, onSelect }) {
+function SpeakerDropdown({ name, onSelect, saving, disabled }) {
   const [open, setOpen] = useState(false);
   const [speakers, setSpeakers] = useState([]);
   const [showNew, setShowNew] = useState(false);
@@ -375,6 +394,8 @@ function SpeakerDropdown({ name, onSelect }) {
       getSpeakers().then(setSpeakers);
     }
   }, [open]);
+
+  useEffect(() => { if (disabled && open) setOpen(false); }, [disabled, open]);
 
   useEffect(() => {
     function handleClick(e) {
@@ -402,9 +423,10 @@ function SpeakerDropdown({ name, onSelect }) {
 
   return (
     <div className="relative" ref={dropRef}>
-      <span className="cursor-pointer hover:text-[#2563eb] transition-colors text-sm"
-        onClick={() => setOpen(!open)}>
+      <span className={`transition-colors text-sm inline-flex items-center gap-1 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:text-[#2563eb]'}`}
+        onClick={() => { if (!disabled) setOpen(!open); }}>
         {name}
+        {saving && <Loader2 className="w-3 h-3 animate-spin text-[#2563eb]" />}
       </span>
       {open && (
         <div className="absolute top-6 left-0 z-50 bg-white border border-[#e5e7eb] rounded-lg shadow-lg w-[200px] py-1">
