@@ -4,18 +4,17 @@
 Kept:
   - users (so login still works)
   - correction_dict (useful vocab accumulated over time)
-  - speaker_profiles WHERE source='ad' AND first_name != '' AND last_name != ''
-    (229 AD rows → ~214 after the non-human filter; the filter matches
-    frontend_auth/ad_service.py list_all_ad_users)
 
 Wiped:
   - transcription_segments, transcriptions
   - audio_files (DB rows + files on disk)
   - meeting_recordings
   - user_calendar_cache
-  - speaker_profiles WHERE source='manual' (every row)
-  - speaker_profiles WHERE source='ad' AND (first_name='' OR last_name='')
-    (guest07, testuser, krbtgt, administrator, etc.)
+  - speaker_profiles (ALL rows — both manual and ad)
+    The daily AD sync at 04:00 will repopulate ~214 humans on its next
+    run; the new ad_service filter (frontend_auth commit 5fdc1d2) drops
+    the ~15 non-human accounts (krbtgt, guest, testuser, ...) so they
+    won't come back.
   - transcription_groups (every row, incl. is_default=True — a fresh
     install has none)
 
@@ -31,8 +30,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import or_
-
 from app.database import SessionLocal
 from app.models.audio import AudioFile
 from app.models.transcription import (
@@ -43,18 +40,6 @@ from app.models.transcription import (
 )
 from app.models.meeting import MeetingRecording, UserCalendarCache
 from app.models.user import User
-
-
-def _nonhuman_ad_filter():
-    return [
-        SpeakerProfile.source == "ad",
-        or_(
-            SpeakerProfile.first_name.is_(None),
-            SpeakerProfile.first_name == "",
-            SpeakerProfile.last_name.is_(None),
-            SpeakerProfile.last_name == "",
-        ),
-    ]
 
 
 def main():
@@ -73,23 +58,15 @@ def main():
             "user_calendar_cache": db.query(UserCalendarCache).count(),
             "speaker_profiles (manual)":
                 db.query(SpeakerProfile).filter(SpeakerProfile.source == "manual").count(),
-            "speaker_profiles (ad non-human)":
-                db.query(SpeakerProfile).filter(*_nonhuman_ad_filter()).count(),
+            "speaker_profiles (ad — will be repopulated by daily sync)":
+                db.query(SpeakerProfile).filter(SpeakerProfile.source == "ad").count(),
             "transcription_groups": db.query(TranscriptionGroup).count(),
         }
 
         print("=== Wipe plan ===")
         for k, v in counts.items():
             print(f"  DELETE {k}: {v}")
-        kept_ad = db.query(SpeakerProfile).filter(
-            SpeakerProfile.source == "ad",
-            SpeakerProfile.first_name != "",
-            SpeakerProfile.first_name.isnot(None),
-            SpeakerProfile.last_name != "",
-            SpeakerProfile.last_name.isnot(None),
-        ).count()
         kept_users = db.query(User).count()
-        print(f"  KEEP speaker_profiles (ad, human): {kept_ad}")
         print(f"  KEEP users: {kept_users}")
 
         if not args.confirm:
@@ -118,12 +95,8 @@ def main():
         db.query(Transcription).delete(synchronize_session=False)
         db.query(AudioFile).delete(synchronize_session=False)
         db.query(UserCalendarCache).delete(synchronize_session=False)
-        db.query(SpeakerProfile).filter(
-            SpeakerProfile.source == "manual"
-        ).delete(synchronize_session=False)
-        db.query(SpeakerProfile).filter(
-            *_nonhuman_ad_filter()
-        ).delete(synchronize_session=False)
+        # Wipe ALL speaker profiles — daily AD sync will re-populate humans
+        db.query(SpeakerProfile).delete(synchronize_session=False)
         db.query(TranscriptionGroup).delete(synchronize_session=False)
         db.commit()
         print("DB: wipe committed")
