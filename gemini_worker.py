@@ -658,6 +658,35 @@ def _dedup_text(text):
     return text.strip()
 
 
+def _map_text_to_deepgram_timeline(gemini_segments, dg_segments, duration):
+    """Normalize Gemini output: parse time strings to float + assign speakers from Deepgram.
+
+    Gemini segments come back with string times ("MM:SS") and sometimes without speakers.
+    This converts them to the flat dict format the DB expects (start/end as floats, speaker string).
+    """
+    # Ensure speakers assigned (idempotent — if already assigned from chunked path, no-op)
+    gemini_segments = _assign_speakers_from_timeline(gemini_segments, dg_segments)
+
+    result = []
+    for seg in gemini_segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        start = _parse_time(str(seg.get("start", "0:0")))
+        end = _parse_time(str(seg.get("end", "0:0")))
+        if end <= start:
+            end = start + 0.5
+        end = min(end, duration)
+        speaker = seg.get("speaker") or "Speaker 1"
+        result.append({
+            "start": float(start),
+            "end": float(end),
+            "speaker": speaker,
+            "text": text,
+        })
+    return result
+
+
 def _assign_speakers_from_timeline(gemini_segments, dg_segments):
     """Override Gemini speaker assignments with Deepgram timeline speakers."""
     for seg in gemini_segments:
@@ -1153,8 +1182,68 @@ def _fix_thai_splits(segments):
     return final
 
 
-def _process_spectral(db, t, file_path, transcription_id, start_time):
-    """Spectral clustering pipeline: Deepgram + spectral speakers + Gemini audio-correct."""
+def _check_deepgram_diarization_quality(utterances):
+    """Decide whether Deepgram's built-in diarization is good enough.
+
+    Returns (is_good, num_speakers, max_pct, reason).
+    Poor diarization = 1 speaker total, or one speaker dominates >85% of speech time.
+    """
+    if not utterances:
+        return False, 0, 1.0, "no utterances"
+
+    durs = {}
+    for u in utterances:
+        sp = u.get("speaker", 0)
+        durs[sp] = durs.get(sp, 0) + (u["end"] - u["start"])
+
+    num_speakers = len(durs)
+    total = sum(durs.values()) or 1
+    max_pct = max(durs.values()) / total
+
+    if num_speakers < 2:
+        return False, num_speakers, max_pct, f"only {num_speakers} speaker"
+    if max_pct > 0.85:
+        return False, num_speakers, max_pct, f"one speaker dominates {max_pct*100:.0f}%"
+    return True, num_speakers, max_pct, f"{num_speakers} speakers, max {max_pct*100:.0f}%"
+
+
+def _build_segments_from_deepgram(utterances):
+    """Build diarized segments using Deepgram's built-in speaker labels."""
+    segments = []
+    for u in utterances:
+        sp = u.get("speaker", 0)
+        segments.append({
+            "start": u["start"],
+            "end": u["end"],
+            "speaker": f"Speaker {sp + 1}",
+            "text": u.get("transcript", ""),
+        })
+
+    # Merge consecutive same-speaker (gap < 5s) — same rule as spectral pipeline
+    if not segments:
+        return []
+    merged = [dict(segments[0])]
+    for seg in segments[1:]:
+        if seg["speaker"] == merged[-1]["speaker"] and seg["start"] - merged[-1]["end"] < 5.0:
+            merged[-1]["end"] = seg["end"]
+            merged[-1]["text"] += " " + seg["text"]
+        else:
+            merged.append(dict(seg))
+
+    # Clean Thai word splits
+    for seg in merged:
+        seg["text"] = re.sub(r"(?<=[\u0E00-\u0E7F])\s+(?=[\u0E00-\u0E7F])", "", seg["text"])
+    return merged
+
+
+def _process_spectral(db, t, file_path, transcription_id, start_time, mode="spectral"):
+    """Diarization pipeline: Deepgram + (Deepgram-speakers | Spectral) + Gemini audio-correct.
+
+    mode="spectral" — always re-cluster with spectral (useful when you know Deepgram can't
+                      diarize mono-mixed single-mic recordings).
+    mode="smart"    — use Deepgram's diarization if it looks good, fall back to spectral
+                      only when Deepgram collapses everyone into one speaker.
+    """
     import httpx
 
     # Get duration
@@ -1191,12 +1280,27 @@ def _process_spectral(db, t, file_path, transcription_id, start_time):
 
     logger.info("#%d Deepgram: %d utterances", transcription_id, len(utterances))
 
-    # Step 2: Spectral clustering (30-50%)
-    with ProgressTicker(db, t, 30, 50, "กำลังแยกผู้พูด (Spectral Clustering)...", interval=3):
-        segments = _spectral_diarize(file_path, utterances, n_clusters=4)
+    # Step 2: Choose diarization method (30-50%)
+    use_spectral = True
+    if mode == "smart":
+        is_good, n_sp, max_pct, reason = _check_deepgram_diarization_quality(utterances)
+        logger.info("#%d Smart quality check: %s (good=%s)", transcription_id, reason, is_good)
+        use_spectral = not is_good
+
+    if use_spectral:
+        with ProgressTicker(db, t, 30, 50, "กำลังแยกผู้พูด (Spectral Clustering)...", interval=3):
+            segments = _spectral_diarize(file_path, utterances, n_clusters=4)
+        logger.info("#%d Spectral: %d segments, %d speakers",
+                    transcription_id, len(segments), len(set(s["speaker"] for s in segments)))
+    else:
+        t.progress_percent = 50
+        t.status_message = "ใช้ผู้พูดจาก Deepgram diarization..."
+        db.commit()
+        segments = _build_segments_from_deepgram(utterances)
+        logger.info("#%d Deepgram-speakers: %d segments, %d speakers",
+                    transcription_id, len(segments), len(set(s["speaker"] for s in segments)))
 
     num_speakers = len(set(seg["speaker"] for seg in segments))
-    logger.info("#%d Spectral: %d segments, %d speakers", transcription_id, len(segments), num_speakers)
 
     # Step 3: Gemini audio-correct (50-85%)
     with ProgressTicker(db, t, 50, 85, "Gemini กำลังแก้ไขข้อความ...", interval=5):
@@ -1583,10 +1687,16 @@ def process_transcription(transcription_id):
             _process_gemini_single(db, t, file_path, transcription_id, start_time)
             return
 
-        # Spectral: Deepgram timestamps + spectral clustering speakers + Gemini audio-correct
+        # Smart: Deepgram diarize if good, fallback to spectral if one-speaker-collapse
+        if diarization_model == "smart":
+            logger.info("#%d Using Smart hybrid mode", transcription_id)
+            _process_spectral(db, t, file_path, transcription_id, start_time, mode="smart")
+            return
+
+        # Spectral: force spectral re-clustering (useful for mono single-mic recordings)
         if diarization_model == "spectral":
             logger.info("#%d Using Spectral clustering mode", transcription_id)
-            _process_spectral(db, t, file_path, transcription_id, start_time)
+            _process_spectral(db, t, file_path, transcription_id, start_time, mode="spectral")
             return
 
         # Step 1: Diarization (5-25%)

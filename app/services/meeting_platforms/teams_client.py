@@ -50,44 +50,107 @@ class TeamsClient(MeetingPlatformClient):
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
 
-    def _graph_download(self, url: str, dest_path: str) -> bool:
-        """Download file from Graph API to disk (streaming)."""
-        token = self._get_token()
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {token}",
-        })
-        try:
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                with open(dest_path, "wb") as f:
-                    while True:
-                        chunk = resp.read(8192)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-            return True
-        except Exception as e:
-            logger.error("Download failed: %s", e)
-            return False
+    def _graph_download(self, url: str, dest_path: str, max_attempts: int = 3) -> bool:
+        """Download file from Graph API to disk (streaming).
+        Retries on transient errors (token expiry, network blip).
+        """
+        import time
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # Fresh token each attempt — handles long downloads where token expired
+                token = self._get_token()
+                req = urllib.request.Request(url, headers={
+                    "Authorization": f"Bearer {token}",
+                })
+                with urllib.request.urlopen(req, timeout=600) as resp:
+                    with open(dest_path, "wb") as f:
+                        while True:
+                            chunk = resp.read(64 * 1024)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                logger.info("Downloaded %s on attempt %d", dest_path, attempt)
+                return True
+            except Exception as e:
+                last_error = e
+                logger.warning("Download attempt %d/%d failed: %s: %s",
+                               attempt, max_attempts, type(e).__name__, e)
+                if attempt < max_attempts:
+                    time.sleep(2 ** attempt)  # 2s, 4s backoff
+        logger.error("Download failed after %d attempts: %s: %s",
+                     max_attempts, type(last_error).__name__, last_error)
+        return False
 
     def _get_poll_emails(self, db: Session) -> list[str]:
-        """Get emails to poll: active users from DB + extra from config."""
+        """Get emails to poll: active users + organizers found in their calendars + extras from config.
+
+        We expand beyond active DB users by reading their calendars and adding any meeting
+        organizer email we find. This way recordings stored in non-Voizely-user OneDrives
+        still get discovered.
+        """
         from app.models.user import User
 
-        # Emails from active users in DB (AD login)
+        # Emails from active users in DB (AD login) — skip @local placeholders
         db_users = (
             db.query(User.email)
             .filter(User.is_active == True, User.email.isnot(None), User.email != "")
             .all()
         )
-        emails = {u.email.strip().lower() for u in db_users if u.email}
+        active_emails = {
+            u.email.strip().lower() for u in db_users
+            if u.email and "@local" not in u.email
+        }
 
         # Extra emails from config (e.g. dev email as exception)
         for e in settings.MS_TEAMS_POLL_USERS.split(","):
-            e = e.strip()
+            e = e.strip().lower()
             if e:
-                emails.add(e.lower())
+                active_emails.add(e)
 
-        return list(emails)
+        # Expand: pull organizer emails from each active user's calendar
+        all_emails = set(active_emails)
+        for user_email in active_emails:
+            try:
+                organizers = self.get_user_calendar_organizers(user_email)
+                new_orgs = organizers - all_emails
+                if new_orgs:
+                    logger.info("Discovered %d new organizer(s) from %s calendar", len(new_orgs), user_email)
+                all_emails.update(organizers)
+            except Exception as e:
+                logger.warning("Failed to expand organizers for %s: %s", user_email, e)
+
+        return list(all_emails)
+
+    def get_user_calendar_organizers(self, email: str, days: int = 30) -> set[str]:
+        """Get unique organizer emails from user's calendar (online meetings only).
+        Used to expand the poll list so we can scan organizer OneDrives for recordings.
+        """
+        start_dt = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+        end_dt = datetime.utcnow().strftime("%Y-%m-%dT23:59:59Z")
+
+        params = urllib.parse.urlencode({
+            "startDateTime": start_dt,
+            "endDateTime": end_dt,
+            "$select": "isOnlineMeeting,organizer",
+            "$top": "200",
+        })
+        url = f"{GRAPH_BASE}/users/{email}/calendarView?{params}"
+
+        try:
+            data = self._graph_get(url)
+        except Exception as e:
+            logger.error("Failed to fetch calendar organizers for %s: %s", email, e)
+            return set()
+
+        organizers = set()
+        for item in data.get("value", []):
+            if not item.get("isOnlineMeeting"):
+                continue
+            org_email = item.get("organizer", {}).get("emailAddress", {}).get("address", "")
+            if org_email:
+                organizers.add(org_email.strip().lower())
+        return organizers
 
     def discover_new_recordings(self, db: Session) -> list[dict]:
         """Scan OneDrive /Recordings/ folder for each user."""
@@ -97,8 +160,8 @@ class TeamsClient(MeetingPlatformClient):
             return []
 
         new_recordings = []
-        # Only look at files from the last 7 days
-        cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat() + "Z"
+        # Look at files from the last 30 days (matches calendar lookup window)
+        cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat() + "Z"
 
         for email in users:
             try:
@@ -109,33 +172,34 @@ class TeamsClient(MeetingPlatformClient):
 
         return new_recordings
 
-    # Teams recording folder names vary by locale
-    RECORDING_FOLDERS = ["Recordings", "การบันทึก"]
+    # Teams recording folder names vary by locale and Teams version
+    RECORDING_FOLDERS = ["Recordings", "การบันทึก", "การประชุม", "Meetings"]
 
     def _discover_user_recordings(self, db: Session, email: str, cutoff: str) -> list[dict]:
-        """Discover recordings for a single user."""
-        # Try each possible folder name (varies by Teams locale)
-        data = None
+        """Discover recordings for a single user. Scans ALL known folder names (some may exist
+        but be empty while another holds the real recordings)."""
+        items = []
         for folder in self.RECORDING_FOLDERS:
             folder_encoded = urllib.parse.quote(folder)
             params = urllib.parse.urlencode({
                 "$select": "id,name,lastModifiedDateTime,size,file,parentReference",
-                "$top": "50",
+                "$top": "200",
             })
             url = f"{GRAPH_BASE}/users/{email}/drive/root:/{folder_encoded}:/children?{params}"
             try:
                 data = self._graph_get(url)
-                break  # Found the folder
+                items.extend(data.get("value", []))
             except urllib.error.HTTPError as e:
                 if e.code == 404:
-                    continue  # Try next folder name
-                raise
+                    continue  # Folder doesn't exist for this locale — try next
+                logger.warning("Error scanning %s/%s: %s", email, folder, e)
+            except Exception as e:
+                logger.warning("Error scanning %s/%s: %s", email, folder, e)
 
-        if data is None:
-            logger.info("No recordings folder for %s (tried: %s)", email, ", ".join(self.RECORDING_FOLDERS))
+        if not items:
+            logger.info("No recording files found for %s", email)
             return []
 
-        items = data.get("value", [])
         recordings = []
 
         for item in items:
@@ -175,6 +239,9 @@ class TeamsClient(MeetingPlatformClient):
             meeting_start = self._parse_datetime(item.get("lastModifiedDateTime"))
             attendees = self._fetch_meeting_attendees(email, subject, meeting_start)
 
+            # If calendar lookup failed, at least include the OneDrive owner as attendee
+            if not attendees:
+                attendees = [email.lower()]
             recordings.append({
                 "platform_recording_id": item_id,
                 "meeting_subject": subject,
@@ -228,8 +295,13 @@ class TeamsClient(MeetingPlatformClient):
             attendee_emails = []
             for att in event.get("attendees", []):
                 email_addr = att.get("emailAddress", {}).get("address", "").strip().lower()
-                if email_addr and email_addr != organizer_email.lower():
+                if email_addr:
                     attendee_emails.append(email_addr)
+
+            # Always include organizer as attendee (they were invited to their own meeting)
+            org_lower = organizer_email.lower()
+            if org_lower not in attendee_emails:
+                attendee_emails.append(org_lower)
 
             logger.info("Found %d attendee(s) for '%s'", len(attendee_emails), subject)
             return attendee_emails
@@ -237,6 +309,42 @@ class TeamsClient(MeetingPlatformClient):
         except Exception as e:
             logger.warning("Failed to fetch attendees for '%s': %s", subject, e)
             return []
+
+    def get_user_calendar_subjects(self, email: str, days: int = 30) -> list[dict]:
+        """Get online meeting subjects from user's calendar for the last N days.
+        Returns list of {"subject": str, "start_time": datetime}.
+        """
+        start_dt = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+        end_dt = datetime.utcnow().strftime("%Y-%m-%dT23:59:59Z")
+
+        params = urllib.parse.urlencode({
+            "startDateTime": start_dt,
+            "endDateTime": end_dt,
+            "$select": "subject,start,end,isOnlineMeeting",
+            "$top": "200",
+            "$orderby": "start/dateTime desc",
+        })
+        url = f"{GRAPH_BASE}/users/{email}/calendarView?{params}"
+
+        try:
+            data = self._graph_get(url)
+        except Exception as e:
+            logger.error("Failed to fetch calendar for %s: %s", email, e)
+            return []
+
+        events = []
+        for item in data.get("value", []):
+            if not item.get("isOnlineMeeting"):
+                continue
+            subject = (item.get("subject") or "").strip()
+            start_str = item.get("start", {}).get("dateTime", "")
+            if subject:
+                events.append({
+                    "subject": subject,
+                    "start_time": self._parse_datetime(start_str),
+                })
+        logger.info("Calendar for %s: %d online meetings (last %d days)", email, len(events), days)
+        return events
 
     def download_recording(self, recording_info: dict, dest_path: str) -> bool:
         """Download recording from OneDrive."""
@@ -250,25 +358,36 @@ class TeamsClient(MeetingPlatformClient):
     def _parse_subject_from_filename(filename: str) -> str:
         """Parse meeting subject from Teams recording filename.
 
-        Teams format examples:
+        Teams format examples (varies by locale):
         - "Weekly Standup-20260407_1030-Recording.mp4"
-        - "Meeting in channel-20260407_1030-Recording.mp4"
+        - "Meeting in channel-20260407_1030-Meeting Recording.mp4"
+        - "ประชุมทีม-20260407_1030-การบันทึกการประชุม.mp4"
         """
         name = filename.rsplit(".", 1)[0]  # remove .mp4
-        # Remove -Recording suffix
-        if name.endswith("-Recording"):
-            name = name[:-len("-Recording")]
+        # Remove recording suffix (varies by locale)
+        for suffix in ("-Meeting Recording", "-การบันทึกการประชุม", "-Recording"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
         # Remove date-time suffix (last part after last -)
         parts = name.rsplit("-", 1)
         if len(parts) > 1 and len(parts[-1]) >= 8 and parts[-1][:8].isdigit():
             name = parts[0]
+        # Strip BOM/zero-width chars sometimes left from Thai filenames
+        name = name.strip().lstrip("\ufeff\u200b\u0e3a")
         return name.strip() or filename
 
     @staticmethod
     def _parse_datetime(dt_str: str | None) -> datetime | None:
         if not dt_str:
             return None
+        # Graph API returns 7 decimal places (e.g. "2026-04-10T10:30:00.0000000")
+        # which Python's fromisoformat can't handle (max 6). Truncate to microseconds.
+        import re
+        s = dt_str.replace("Z", "+00:00")
+        # Match .NNNNNNN (7+ digits) and truncate to 6
+        s = re.sub(r"\.(\d{6})\d+", r".\1", s)
         try:
-            return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+            return datetime.fromisoformat(s)
         except (ValueError, AttributeError):
             return None

@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     MS_TEAMS_CLIENT_SECRET: str = ""
     MS_TEAMS_POLL_USERS: str = ""  # comma-separated emails
     MS_TEAMS_POLL_INTERVAL: int = 60  # seconds
-    MS_TEAMS_RECORDING_MODEL: str = "deepgram+gemini"
+    MS_TEAMS_RECORDING_MODEL: str = "smart+gemini"
     MS_TEAMS_DEFAULT_LANGUAGE: str = "th"
 
     # Auth

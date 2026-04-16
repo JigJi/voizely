@@ -1,21 +1,121 @@
 import json
+import logging
+from datetime import datetime, date, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.meeting import MeetingRecording, MeetingRecordingStatus
+from app.models.meeting import MeetingRecording, MeetingRecordingStatus, UserCalendarCache
 from app.models.transcription import Transcription, TranscriptionStatus
 from app.models.audio import AudioFile, AudioStatus
 from app.models.user import User
 from app.routers.auth import get_current_user
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["meetings"])
+
+
+def _get_user_meeting_subjects(db: Session, user: User) -> set[str]:
+    """Get meeting subjects this user attended (last 30 days) using cache.
+
+    Past days are cached forever (meetings don't change retroactively).
+    Only today's events are fetched fresh from Graph API each time.
+    """
+    today = date.today()
+    start_date = today - timedelta(days=30)
+
+    # 1. Get cached subjects for past days (start_date to yesterday)
+    cached = (
+        db.query(UserCalendarCache.subject)
+        .filter(
+            UserCalendarCache.user_id == user.id,
+            UserCalendarCache.cached_date >= start_date,
+            UserCalendarCache.cached_date < today,
+        )
+        .all()
+    )
+    subjects = {row.subject.strip().lower() for row in cached}
+
+    # 2. Find which past days are NOT cached yet → fetch from Graph API
+    cached_dates = set(
+        row[0] for row in
+        db.query(UserCalendarCache.cached_date)
+        .filter(
+            UserCalendarCache.user_id == user.id,
+            UserCalendarCache.cached_date >= start_date,
+            UserCalendarCache.cached_date < today,
+        )
+        .distinct()
+        .all()
+    )
+    missing_dates = [start_date + timedelta(days=i)
+                     for i in range((today - start_date).days)
+                     if (start_date + timedelta(days=i)) not in cached_dates]
+
+    # 3. Always fetch today fresh (today's meetings can still change)
+    fetch_dates = missing_dates + [today]
+
+    if fetch_dates and user.email and "@local" not in user.email:
+        try:
+            from app.services.meeting_platforms.teams_client import TeamsClient
+            client = TeamsClient()
+
+            # Batch into one API call: min(fetch_dates) to today
+            fetch_start = min(fetch_dates)
+            events = client.get_user_calendar_subjects(user.email, days=(today - fetch_start).days + 1)
+
+            # Cache past-day events (not today — today refreshes each time)
+            for evt in events:
+                subj = evt["subject"].strip()
+                subjects.add(subj.lower())
+
+                evt_date = evt["start_time"].date() if evt.get("start_time") else None
+                if evt_date and evt_date < today and evt_date in missing_dates:
+                    existing = (
+                        db.query(UserCalendarCache)
+                        .filter(
+                            UserCalendarCache.user_id == user.id,
+                            UserCalendarCache.subject == subj,
+                            UserCalendarCache.event_start == evt["start_time"],
+                        )
+                        .first()
+                    )
+                    if not existing:
+                        db.add(UserCalendarCache(
+                            user_id=user.id,
+                            subject=subj,
+                            event_start=evt["start_time"],
+                            cached_date=evt_date,
+                        ))
+
+            # Mark missing dates as cached (even if no events — so we don't refetch)
+            for d in missing_dates:
+                if d not in cached_dates:
+                    has_any = (
+                        db.query(UserCalendarCache)
+                        .filter(UserCalendarCache.user_id == user.id, UserCalendarCache.cached_date == d)
+                        .first()
+                    )
+                    if not has_any:
+                        # Insert a sentinel so we know this date was checked
+                        db.add(UserCalendarCache(
+                            user_id=user.id,
+                            subject="__no_events__",
+                            event_start=datetime(d.year, d.month, d.day),
+                            cached_date=d,
+                        ))
+            db.commit()
+        except Exception as e:
+            logger.error("Calendar fetch failed for %s: %s", user.email, e)
+            db.rollback()
+
+    return subjects
 
 
 @router.get("/api/meetings")
 def list_meetings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """List meeting recordings for current user (organizer OR attendee)."""
+    """List meeting recordings that match user's calendar events."""
     if current_user.role == "ADMIN":
         items = (
             db.query(MeetingRecording)
@@ -23,19 +123,19 @@ def list_meetings(db: Session = Depends(get_db), current_user: User = Depends(ge
             .all()
         )
     else:
-        # Show meetings where user is organizer OR listed as attendee
-        email = current_user.email.lower() if current_user.email else ""
-        items = (
+        # Get subjects from user's calendar (cached)
+        user_subjects = _get_user_meeting_subjects(db, current_user)
+
+        # Get all recordings and match by subject
+        all_recordings = (
             db.query(MeetingRecording)
-            .filter(
-                or_(
-                    MeetingRecording.meeting_organizer == current_user.email,
-                    MeetingRecording.attendees.like(f'%"{email}"%'),
-                )
-            )
             .order_by(MeetingRecording.discovered_at.desc())
             .all()
         )
+        items = [
+            m for m in all_recordings
+            if (m.meeting_subject or "").strip().lower() in user_subjects
+        ]
     return [_meeting_to_dict(m, db) for m in items]
 
 
@@ -44,14 +144,70 @@ def get_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: Us
     m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
-    # Check if user is admin, organizer, or attendee
     if current_user.role != "ADMIN":
-        email = (current_user.email or "").lower()
-        organizer = (m.meeting_organizer or "").lower()
-        attendees_str = (m.attendees or "").lower()
-        if email not in organizer and email not in attendees_str:
+        user_subjects = _get_user_meeting_subjects(db, current_user)
+        if (m.meeting_subject or "").strip().lower() not in user_subjects:
             raise HTTPException(status_code=403, detail="Access denied")
     return _meeting_to_dict(m, db)
+
+
+@router.post("/api/meetings/{meeting_id}/retranscribe")
+async def retranscribe_meeting(meeting_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Re-transcribe an already-completed meeting with a (possibly different) model."""
+    from app.models.transcription import TranscriptionSegment, TranscriptionGroup
+    from app.config import settings
+
+    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    if not m:
+        raise HTTPException(status_code=404, detail="Not found")
+    if m.status == MeetingRecordingStatus.queued or m.status == MeetingRecordingStatus.downloading:
+        raise HTTPException(status_code=400, detail="กำลังประมวลผลอยู่ รอให้เสร็จก่อน")
+    if not m.transcription_id:
+        raise HTTPException(status_code=400, detail="ยังไม่เคยถอดเสียง — ใช้ process แทน")
+
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    model_size = body.get("model_size") or settings.MS_TEAMS_RECORDING_MODEL
+    group_id = body.get("group_id")
+
+    t = db.query(Transcription).filter(Transcription.id == m.transcription_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Transcription not found")
+
+    # Wipe old segments + analysis
+    db.query(TranscriptionSegment).filter(TranscriptionSegment.transcription_id == t.id).delete()
+    t.status = TranscriptionStatus.pending
+    t.progress_percent = 0
+    t.status_message = "รอประมวลผล (re-transcribe)"
+    t.full_text = None
+    t.summary = None
+    t.mom_full = None
+    t.auto_title = None
+    t.summary_short = None
+    t.sentiment = None
+    t.meeting_tone = None
+    t.meeting_type = None
+    t.topics = None
+    t.action_items = None
+    t.key_decisions = None
+    t.open_questions = None
+    t.speaker_suggestions = None
+    t.voiceprint_suggestions = None
+    t.model_size = model_size
+    if group_id:
+        t.group_id = int(group_id)
+
+    # Reset audio status
+    audio = db.query(AudioFile).filter(AudioFile.id == m.audio_file_id).first()
+    if audio:
+        audio.status = AudioStatus.processing
+        audio.error_message = None
+
+    m.status = MeetingRecordingStatus.queued
+    m.processed_by = current_user.id
+    m.error_message = None
+    db.commit()
+
+    return {"ok": True, "transcription_id": t.id, "model_size": model_size}
 
 
 @router.post("/api/meetings/{meeting_id}/process")
@@ -174,7 +330,9 @@ async def process_meeting(meeting_id: int, request: Request, db: Session = Depen
 
 @router.post("/api/meetings/{meeting_id}/retry")
 def retry_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Retry a failed/stuck meeting recording."""
+    """Retry a failed/stuck meeting recording. Re-downloads the file if missing."""
+    import os
+    from app.config import settings
     from app.models.transcription import TranscriptionSegment
 
     m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
@@ -190,8 +348,7 @@ def retry_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: 
     # Clear old segments
     db.query(TranscriptionSegment).filter(TranscriptionSegment.transcription_id == t.id).delete()
 
-    # Reset transcription
-    from app.config import settings
+    # Reset transcription state
     t.status = TranscriptionStatus.pending
     t.progress_percent = 0
     t.status_message = None
@@ -199,16 +356,35 @@ def retry_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: 
     t.summary = None
     t.mom_full = None
     t.auto_title = None
-    t.model_size = recording_model
 
-    # Reset audio status
     audio = db.query(AudioFile).filter(AudioFile.id == m.audio_file_id).first()
     if audio:
         audio.status = AudioStatus.processing
         audio.error_message = None
 
+    # If file is missing on disk, re-download in background before worker picks up
+    needs_download = not audio or not audio.file_path or not os.path.exists(audio.file_path) or audio.file_size_bytes == 0
+    if needs_download and m.recording_url and audio:
+        t.status = TranscriptionStatus.in_progress
+        t.status_message = "กำลังดาวน์โหลดไฟล์จาก Teams..."
+        m.status = MeetingRecordingStatus.downloading
+        db.commit()
+
+        import threading
+        _bg_args = {
+            "meeting_id": m.id,
+            "audio_id": audio.id,
+            "transcription_id": t.id,
+            "recording_url": m.recording_url,
+            "meeting_subject": m.meeting_subject or "Teams Recording",
+            "dest_path": audio.file_path,
+        }
+        threading.Thread(target=_download_recording_bg, args=(_bg_args,), daemon=True).start()
+        return {"ok": True, "transcription_id": t.id, "redownloading": True}
+
     m.status = MeetingRecordingStatus.queued
     db.commit()
+    return {"ok": True, "transcription_id": t.id}
 
     return {"ok": True, "transcription_id": t.id}
 

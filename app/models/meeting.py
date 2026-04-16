@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -51,3 +51,18 @@ class MeetingRecording(Base):
 
     audio_file = relationship("AudioFile", foreign_keys=[audio_file_id])
     transcription = relationship("Transcription", foreign_keys=[transcription_id])
+
+
+class UserCalendarCache(Base):
+    """Cache calendar events per user per date — past days never change."""
+    __tablename__ = "user_calendar_cache"
+    __table_args__ = (
+        UniqueConstraint("user_id", "subject", "event_start", name="uq_user_calendar_event"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    subject = Column(String(500), nullable=False)
+    event_start = Column(DateTime, nullable=True)
+    cached_date = Column(Date, nullable=False, index=True)  # which date this entry covers
+    created_at = Column(DateTime, default=datetime.utcnow)
