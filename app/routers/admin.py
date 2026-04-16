@@ -59,26 +59,50 @@ def _shorten_department(dept: str) -> str:
     return dept[:3].upper()
 
 
-def _resolve_nickname(db: Session, desired: str, dept: str, email: str, exclude_id: int | None = None) -> str:
-    """Pick a unique nickname for an AD speaker. Falls back to 'Name DEPT' or email local-part."""
+def _resolve_nickname(
+    db: Session,
+    desired: str,
+    dept: str,
+    email: str,
+    exclude_id: int | None = None,
+    batch_nicks: set[str] | None = None,
+) -> str:
+    """Pick a unique nickname for an AD speaker.
+    Avoids DB collisions AND collisions with other rows added earlier in the same batch.
+    Falls back to 'Name DEPT' → email local-part → 'local-part N'.
+    """
+    batch_nicks = batch_nicks if batch_nicks is not None else set()
     desired = (desired or "").strip() or email.split("@")[0]
-    q = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == desired)
-    if exclude_id:
-        q = q.filter(SpeakerProfile.id != exclude_id)
-    if not q.first():
+
+    def _taken(candidate: str) -> bool:
+        if candidate in batch_nicks:
+            return True
+        q = db.query(SpeakerProfile.id).filter(SpeakerProfile.nickname == candidate)
+        if exclude_id:
+            q = q.filter(SpeakerProfile.id != exclude_id)
+        return q.first() is not None
+
+    if not _taken(desired):
         return desired
 
     dept_short = _shorten_department(dept)
     if dept_short:
         candidate = f"{desired} {dept_short}"
-        q2 = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == candidate)
-        if exclude_id:
-            q2 = q2.filter(SpeakerProfile.id != exclude_id)
-        if not q2.first():
+        if not _taken(candidate):
             return candidate
 
-    # Fallback: email local-part (unique per user)
+    # Fallback: email local-part — unique per AD user, but a manual profile could already own it
     local = email.split("@")[0]
+    if not _taken(local):
+        return local
+
+    # Last resort: append a counter
+    for n in range(2, 100):
+        c = f"{local} {n}"
+        if not _taken(c):
+            return c
+
+    # Shouldn't happen with sane data — let DB raise if it does
     return local
 
 
@@ -93,6 +117,7 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
     """
     now = datetime.now(timezone(timedelta(hours=7)))
     incoming_emails: set[str] = set()
+    batch_nicks: set[str] = set()  # nicknames already assigned in this batch (DB doesn't see uncommitted rows)
     created = updated = reactivated = 0
 
     for u in body.users:
@@ -112,7 +137,10 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
                 continue
 
             # Update fields from AD (AD is authoritative for 'ad' profiles)
-            wanted_nickname = _resolve_nickname(db, nickname, u.department, email, exclude_id=existing.id)
+            wanted_nickname = _resolve_nickname(
+                db, nickname, u.department, email,
+                exclude_id=existing.id, batch_nicks=batch_nicks,
+            )
             if existing.nickname != wanted_nickname:
                 existing.nickname = wanted_nickname
             existing.full_name = full_name
@@ -124,9 +152,12 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
             if was_inactive and existing.is_active:
                 reactivated += 1
             existing.updated_at = now
+            batch_nicks.add(wanted_nickname)
             updated += 1
         else:
-            wanted_nickname = _resolve_nickname(db, nickname, u.department, email)
+            wanted_nickname = _resolve_nickname(
+                db, nickname, u.department, email, batch_nicks=batch_nicks,
+            )
             db.add(SpeakerProfile(
                 nickname=wanted_nickname,
                 source="ad",
@@ -139,6 +170,7 @@ def sync_ad_speakers(body: SyncADSpeakersRequest, db: Session = Depends(get_db))
                 created_at=now,
                 updated_at=now,
             ))
+            batch_nicks.add(wanted_nickname)
             created += 1
 
     # Mark missing AD users inactive (leavers not present in this sync batch).
