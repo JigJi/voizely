@@ -14,12 +14,19 @@ templates = Jinja2Templates(directory="app/templates")
 
 @router.get("/api/groups")
 def list_groups(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    default = db.query(TranscriptionGroup).filter(TranscriptionGroup.is_default == True).first()
-    if not default:
+    defaults = db.query(TranscriptionGroup).filter(TranscriptionGroup.is_default == True).order_by(TranscriptionGroup.id).all()
+    if not defaults:
         default = TranscriptionGroup(name="ทั่วไป", is_default=True, sort_order=9999)
         db.add(default)
         db.commit()
         db.refresh(default)
+    elif len(defaults) > 1:
+        keep = defaults[0]
+        for dup in defaults[1:]:
+            for t in dup.transcriptions:
+                t.group_id = keep.id
+            db.delete(dup)
+        db.commit()
     groups = (
         db.query(TranscriptionGroup)
         .filter(

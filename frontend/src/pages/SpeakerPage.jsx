@@ -57,7 +57,6 @@ export default function SpeakerPage() {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-[#e5e7eb] text-left">
-            <th className="py-2 px-3 font-medium text-[#6b7280] w-8">ID</th>
             <th className="py-2 px-3 font-medium text-[#6b7280]">ชื่อเรียก</th>
             <th className="py-2 px-3 font-medium text-[#6b7280]">ชื่อ-สกุล</th>
             <th className="py-2 px-3 font-medium text-[#6b7280]">อีเมล</th>
@@ -71,7 +70,6 @@ export default function SpeakerPage() {
         <tbody>
           {speakers.map(s => (
             <tr key={s.id} className="border-b border-[#f3f4f6] hover:bg-[#f9fafb] transition-colors">
-              <td className="py-2 px-3 text-[#9ca3af] text-xs">{s.id}</td>
               <td className="py-2 px-3"><EditableCell value={s.nickname} onSave={v => handleEdit(s.id, 'nickname', v)} /></td>
               <td className="py-2 px-3"><EditableCell value={s.full_name} onSave={v => handleEdit(s.id, 'full_name', v)} /></td>
               <td className="py-2 px-3"><EditableCell value={s.email} onSave={v => handleEdit(s.id, 'email', v)} /></td>
@@ -87,7 +85,7 @@ export default function SpeakerPage() {
             </tr>
           ))}
           {!speakers.length && (
-            <tr><td colSpan="9" className="py-8 text-center text-[#9ca3af]">ยังไม่มีผู้พูด</td></tr>
+            <tr><td colSpan="8" className="py-8 text-center text-[#9ca3af]">ยังไม่มีผู้พูด</td></tr>
           )}
         </tbody>
       </table>
