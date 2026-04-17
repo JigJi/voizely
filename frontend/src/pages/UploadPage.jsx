@@ -9,7 +9,7 @@ export default function UploadPage() {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [groups, setGroups] = useState([]);
-  const [form, setForm] = useState({ group_id: '', diarization_model: 'deepgram', transcription_model: 'gemini' });
+  const [form, setForm] = useState({ group_id: '', diarization_model: 'smart', transcription_model: 'gemini' });
   const fileRef = useRef();
   const navigate = useNavigate();
 
@@ -103,11 +103,11 @@ export default function UploadPage() {
             <label className="block text-sm font-medium mb-1.5">Diarization (แยกผู้พูด)</label>
             <select value={form.diarization_model} onChange={e => setForm({ ...form, diarization_model: e.target.value })}
               className="w-full px-3 py-2.5 border border-[#d1d5db] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]">
-              <option value="deepgram">Deepgram Nova-3 (API)</option>
+              <option value="smart">อัตโนมัติ (แนะนำ)</option>
               <option value="spectral">Spectral Clustering (Deepgram + Local GPU)</option>
+              <option value="deepgram">Deepgram Nova-3 (API)</option>
               <option value="pyannote">Pyannote (Local GPU)</option>
               <option value="gemini">Gemini 2.5 Flash (API)</option>
-              <option value="gpt">GPT-4o (API)</option>
             </select>
           </div>
 

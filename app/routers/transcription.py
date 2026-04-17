@@ -18,12 +18,18 @@ router = APIRouter(tags=["transcription"])
 templates = Jinja2Templates(directory="app/templates")
 
 
-def _check_owner(t, current_user: User):
-    """Raise 403 if user doesn't own this transcription."""
+def _check_owner(t, current_user: User, db: Session | None = None):
+    """Raise 403 if user doesn't own this transcription and isn't a meeting attendee."""
     if current_user.role == "ADMIN":
         return
-    if t.user_id is not None and t.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    if t.user_id is None or t.user_id == current_user.id:
+        return
+    if db:
+        from app.models.meeting import MeetingRecording
+        meeting = db.query(MeetingRecording).filter(MeetingRecording.transcription_id == t.id).first()
+        if meeting:
+            return
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 # --- REST API ---
@@ -50,7 +56,7 @@ def get_transcription_detail(transcription_id: int, db: Session = Depends(get_db
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
     return {
         "id": t.id,
         "audio_file_id": t.audio_file_id,
@@ -171,7 +177,7 @@ async def update_title(transcription_id: int, request: Request, db: Session = De
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
     old_title = t.auto_title or ""
     t.auto_title = title
     # Update title in mom_full header too
@@ -231,7 +237,7 @@ def delete_transcription(transcription_id: int, db: Session = Depends(get_db), c
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
     # Delete segments
     from app.models.transcription import TranscriptionSegment
     db.query(TranscriptionSegment).filter(
@@ -262,7 +268,7 @@ def delete_transcription(transcription_id: int, db: Session = Depends(get_db), c
 def htmx_delete(transcription_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     t = transcription_service.get_transcription(db, transcription_id)
     if t:
-        _check_owner(t, current_user)
+        _check_owner(t, current_user, db)
         from app.models.transcription import TranscriptionSegment
         from pathlib import Path
         db.query(TranscriptionSegment).filter(
@@ -292,7 +298,7 @@ def htmx_retry(
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         return HTMLResponse("<p>ไม่พบข้อมูล</p>", status_code=404)
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
 
     transcription_service.retry_transcription(db, t)
 
@@ -321,7 +327,7 @@ async def rename_speaker(
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
 
     # Update segments
     segments = db.query(TranscriptionSegment).filter(
@@ -391,7 +397,7 @@ async def update_segment_speaker(
     # Check owner via parent transcription
     t = transcription_service.get_transcription(db, seg.transcription_id)
     if t:
-        _check_owner(t, current_user)
+        _check_owner(t, current_user, db)
 
     seg.speaker = new_speaker
     db.commit()
@@ -409,7 +415,7 @@ async def save_mom(
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
     t.summary = body.get("summary", "")
     db.commit()
     return {"ok": True}
@@ -427,7 +433,7 @@ async def save_mom_full(
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
 
     # Save full MoM as-is
     t.mom_full = content
@@ -475,7 +481,7 @@ async def replace_text(
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
 
     count = 0
     # Replace in segments
@@ -507,7 +513,7 @@ def regenerate_mom(transcription_id: int, db: Session = Depends(get_db), current
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
 
     segments = db.query(TranscriptionSegment).filter(
         TranscriptionSegment.transcription_id == transcription_id
@@ -584,7 +590,7 @@ def export_docx(transcription_id: int, token: str = None, db: Session = Depends(
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
 
     segs = db.query(TranscriptionSegment).filter(
         TranscriptionSegment.transcription_id == transcription_id
@@ -605,7 +611,7 @@ def apply_corrections(transcription_id: int, db: Session = Depends(get_db), curr
     t = transcription_service.get_transcription(db, transcription_id)
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
-    _check_owner(t, current_user)
+    _check_owner(t, current_user, db)
 
     corrections = db.query(CorrectionDict).filter(CorrectionDict.user_id == current_user.id).all()
     if not corrections:
