@@ -55,7 +55,7 @@ export const renameAudio = (id, name) => request(`/api/audio/${id}/rename`, { me
 export const audioStreamUrl = (id) => `/api/audio/${id}/stream`;
 
 // Speakers (Profile)
-export const getSpeakers = () => request('/api/speakers');
+export const getSpeakers = (source) => request(`/api/speakers${source ? `?source=${source}` : ''}`);
 export const createSpeaker = (data) => request('/api/speakers', { method: 'POST', body: JSON.stringify(data) });
 export const updateSpeaker = (id, data) => request(`/api/speakers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteSpeaker = (id) => request(`/api/speakers/${id}`, { method: 'DELETE' });

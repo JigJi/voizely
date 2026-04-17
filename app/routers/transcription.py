@@ -640,9 +640,12 @@ def apply_corrections(transcription_id: int, db: Session = Depends(get_db), curr
 # --- Speaker Profile API ---
 
 @router.get("/api/speakers")
-def list_speakers(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def list_speakers(source: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
-    profiles = db.query(SpeakerProfile).order_by(SpeakerProfile.nickname).all()
+    q = db.query(SpeakerProfile)
+    if source:
+        q = q.filter(SpeakerProfile.source == source)
+    profiles = q.order_by(SpeakerProfile.nickname).all()
     return [{
         "id": p.id,
         "nickname": p.nickname,

@@ -10,7 +10,7 @@ export default function SpeakerPage() {
   const [showNew, setShowNew] = useState(false);
 
   useEffect(() => { load(); }, []);
-  async function load() { setSpeakers(await getSpeakers()); }
+  async function load() { setSpeakers(await getSpeakers('manual')); }
 
   async function handleEdit(id, field, value) {
     try {

@@ -5,7 +5,7 @@ import { notify } from '../components/Notification';
 import ProgressSteps from '../components/ProgressSteps';
 import MomModal from '../tabs/MomModal';
 import Modal from '../components/Modal';
-import { Pencil, Loader2 } from 'lucide-react';
+import { Pencil, Loader2, Sparkles } from 'lucide-react';
 
 const SPEAKER_COLORS = ['#2563eb', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6'];
 
@@ -170,39 +170,19 @@ export default function TranscriptionPage() {
                   const items = Object.entries(speakerColorMap).map(([name, color]) => {
                     const totalSec = (data.segments || []).filter(s => s.speaker === name).reduce((sum, s) => sum + (s.end_time - s.start_time), 0);
                     const pct = totalAll > 0 ? Math.round(totalSec / totalAll * 100) : 0;
-                    // Get suggestions
                     const llm = name.startsWith('Speaker ') ? llmSuggestions.find(s => s.speaker === name) : null;
                     const vp = name.startsWith('Speaker ') ? vpSuggestions.find(s => s.speaker === name) : null;
-                    // Decide which to show
-                    let suggest = null;
-                    if (llm && vp && llm.suggested_name === vp.suggested_name) {
-                      suggest = { name: llm.suggested_name, color: '#22c55e', source: 'both' }; // green = both agree
-                    } else if (llm && vp) {
-                      // Pick higher confidence: vp has score, llm doesn't — prefer vp if score >= 0.7
-                      suggest = vp.score >= 0.70
-                        ? { name: vp.suggested_name, color: '#f59e0b', source: 'voiceprint' } // orange
-                        : { name: llm.suggested_name, color: '#2563eb', source: 'llm' }; // blue
-                    } else if (llm) {
-                      suggest = { name: llm.suggested_name, color: '#2563eb', source: 'llm' };
-                    } else if (vp) {
-                      suggest = { name: vp.suggested_name, color: '#f59e0b', source: 'voiceprint' };
-                    }
-                    return { name, color, pct, suggest };
+                    const hasSuggest = !!(llm || vp);
+                    return { name, color, pct, llm, vp, hasSuggest };
                   }).sort((a, b) => b.pct - a.pct);
 
-                  const hasSuggestions = items.some(i => i.suggest);
-                  return (<>
-                  {items.map(({ name, color, pct, suggest }) => (
+                  return items.map(({ name, color, pct, llm, vp, hasSuggest }) => (
                     <React.Fragment key={name}>
                       <div className="flex items-center gap-1 pr-2 whitespace-nowrap">
                         <SpeakerDropdown name={name} saving={savingSpeaker === name} disabled={!!savingSpeaker}
                           onSelect={(newName) => handleRenameSpeaker(name, newName)} />
-                        {suggest && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px]"
-                            style={{ background: suggest.color + '18', color: suggest.color }}
-                            title={suggest.source === 'both' ? 'AI + Voiceprint ตรงกัน' : suggest.source === 'voiceprint' ? 'จาก Voiceprint' : 'จาก AI'}>
-                            {suggest.name}
-                          </span>
+                        {hasSuggest && (
+                          <SuggestIcon llm={llm} vp={vp} />
                         )}
                       </div>
                       <div className="flex items-center">
@@ -212,15 +192,7 @@ export default function TranscriptionPage() {
                       </div>
                       <span className="text-[#9ca3af] text-sm text-right pl-1">{pct}%</span>
                     </React.Fragment>
-                  ))}
-                  {hasSuggestions && (
-                    <div className="col-span-3 flex gap-3 mt-2 pt-2 border-t border-[#f3f4f6]">
-                      <span className="flex items-center gap-1 text-[9px] text-[#9ca3af]"><span className="w-2 h-2 rounded-full bg-[#22c55e]" />AI+Voice ตรงกัน</span>
-                      <span className="flex items-center gap-1 text-[9px] text-[#9ca3af]"><span className="w-2 h-2 rounded-full bg-[#2563eb]" />AI แนะนำ</span>
-                      <span className="flex items-center gap-1 text-[9px] text-[#9ca3af]"><span className="w-2 h-2 rounded-full bg-[#f59e0b]" />Voiceprint</span>
-                    </div>
-                  )}
-                  </>);
+                  ));
                 })()}
               </div>
             </div>
@@ -481,6 +453,43 @@ function SpeakerDropdown({ name, onSelect, saving, disabled }) {
                 <button onClick={handleNewSpeaker} className="px-1.5 py-1 text-[10px] bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] shrink-0">ตกลง</button>
               </div>
               {newError && <div className="text-[10px] text-[#ef4444] mt-1">{newError}</div>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function SuggestIcon({ llm, vp }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef();
+
+  useEffect(() => {
+    if (!open) return;
+    function handle(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(!open)} className="p-0.5 rounded hover:bg-[#f3f4f6] transition-colors">
+        <Sparkles className="w-3.5 h-3.5 text-[#2563eb]" />
+      </button>
+      {open && (
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 bg-white border border-[#e5e7eb] rounded-lg shadow-lg w-[180px] p-2.5 space-y-2">
+          {llm && (
+            <div>
+              <div className="text-[10px] text-[#9ca3af]">AI</div>
+              <div className="text-sm font-medium text-[#111827] truncate">{llm.suggested_name}</div>
+            </div>
+          )}
+          {vp && (
+            <div>
+              <div className="text-[10px] text-[#9ca3af]">Voiceprint</div>
+              <div className="text-sm font-medium text-[#111827] truncate">{vp.suggested_name}</div>
             </div>
           )}
         </div>

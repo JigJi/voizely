@@ -580,3 +580,35 @@ if not default:
 ### Status
 
 `WAITING_BACKEND` — รอ pull + restart เพื่อให้ default group ถูกสร้างอัตโนมัติ
+
+---
+
+## [2026-04-17 #2] FROM: frontend
+
+### สิ่งที่ต้องทำฝั่ง backend (2 อย่าง)
+
+#### 1. Speaker endpoint: กรองด้วย `source` query param
+
+แก้แล้วใน `app/routers/transcription.py` — endpoint `GET /api/speakers` รับ `?source=manual` เพื่อกรองเฉพาะ manual speakers สำหรับหน้า Speaker Profiles ถ้าไม่ส่ง param จะ return ทั้งหมด (ใช้ตอนเลือกชื่อใน SpeakerDropdown)
+
+#### 2. รัน AD sync ใหม่เพื่ออัพเดท position
+
+AD sync ครั้งก่อน (16 เม.ย.) อาจยังไม่มี position เพราะ code เก่า ตอนนี้ code map `title` → `position` ถูกแล้ว หลัง pull + restart ให้รัน sync อีกรอบ:
+
+```
+cd C:\deploy\voizely\frontend_auth
+venv\Scripts\python.exe ad_sync_job.py
+```
+
+(รันที่เครื่อง frontend เพราะต้องเข้า AD ได้ แต่ backend ต้อง pull code ใหม่ก่อนเพื่อให้ endpoint รับ position ถูกต้อง)
+
+**ข้อมูล:** AD มี title 170/214 คน (Sales Manager, Senior Sales Executive ฯลฯ) — sync ใหม่แล้ว position จะเข้า DB ครบ
+
+### สิ่งที่ frontend แก้ไปแล้ว
+
+1. **Speaker suggest icon** — เปลี่ยนเป็น Sparkles icon สีน้ำเงิน กดแล้วแสดง popup ทั้ง AI + Voiceprint (info only ไม่มีปุ่ม action)
+2. **SpeakerPage กรอง manual only** — ไม่แสดง AD speakers ในหน้าจัดการผู้พูดแล้ว
+
+### Status
+
+`WAITING_BACKEND` — รอ pull + restart + รัน AD sync ใหม่
