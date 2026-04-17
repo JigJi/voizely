@@ -28,6 +28,8 @@ export default function MeetingPage() {
   const [selectedDiarization, setSelectedDiarization] = useState('smart');
   const [selectedTranscription, setSelectedTranscription] = useState('gemini');
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => { load(); }, []);
@@ -48,7 +50,8 @@ export default function MeetingPage() {
   }
 
   async function handleProcess() {
-    if (!processTarget) return;
+    if (!processTarget || submitting) return;
+    setSubmitting(true);
     try {
       const modelSize = `${selectedDiarization}+${selectedTranscription}`;
       const apiCall = processMode === 'retranscribe' ? retranscribeMeeting : processMeeting;
@@ -67,6 +70,8 @@ export default function MeetingPage() {
     } catch (e) {
       const msg = e?.response?.data?.detail || e.message || 'เกิดข้อผิดพลาด';
       notify(msg, 'error');
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -79,20 +84,23 @@ export default function MeetingPage() {
   }
 
   async function handleRetry(id) {
+    setBusyId(id);
     try {
       await retryMeeting(id);
       notify('กำลังลองใหม่');
       load();
     } catch (e) { notify(e.message, 'error'); }
+    finally { setBusyId(null); }
   }
 
   async function handleDownload(m) {
+    setBusyId(m.id);
     try {
       notify('กำลังดาวน์โหลด...');
       await downloadMeetingAudio(m.id, m.meeting_subject);
     } catch (e) {
       notify(e.message || 'ดาวน์โหลดไม่สำเร็จ', 'error');
-    }
+    } finally { setBusyId(null); }
   }
 
   const platformIcon = (p) => p === 'teams' ? '🟦' : p === 'zoom' ? '🟪' : '🟩';
@@ -158,33 +166,34 @@ export default function MeetingPage() {
                   </div>
 
                   <div className="flex items-center gap-1 ml-3 shrink-0">
+                    {busyId === m.id && <Loader2 className="w-4 h-4 animate-spin text-[#2563eb]" />}
                     {m.transcription_id && m.transcription_status === 'completed' && (
                       <>
                         <button onClick={() => navigate(`/transcriptions/${m.transcription_id}`)}
                           className="px-3 py-1.5 text-xs bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] transition-colors">
                           ดูผล
                         </button>
-                        <button onClick={async () => { const g = await getGroups(); setGroups(g); openProcessModal(m, 'retranscribe'); }}
-                          className="px-3 py-1.5 text-xs border border-[#d1d5db] text-[#374151] rounded hover:bg-[#f3f4f6] transition-colors">
+                        <button disabled={busyId === m.id} onClick={async () => { setBusyId(m.id); const g = await getGroups(); setGroups(g); openProcessModal(m, 'retranscribe'); setBusyId(null); }}
+                          className="px-3 py-1.5 text-xs border border-[#d1d5db] text-[#374151] rounded hover:bg-[#f3f4f6] transition-colors disabled:opacity-50">
                           ถอดเสียงใหม่
                         </button>
                       </>
                     )}
                     {m.audio_file_id && (
-                      <button onClick={() => handleDownload(m)} title="ดาวน์โหลดไฟล์เสียง"
-                        className="p-1.5 text-[#6b7280] hover:text-[#2563eb] transition-colors">
+                      <button disabled={busyId === m.id} onClick={() => handleDownload(m)} title="ดาวน์โหลดไฟล์เสียง"
+                        className="p-1.5 text-[#6b7280] hover:text-[#2563eb] transition-colors disabled:opacity-50">
                         <Download className="w-4 h-4" />
                       </button>
                     )}
                     {(m.status === 'discovered' || m.status === 'skipped') && (
-                      <button onClick={async () => { const g = await getGroups(); setGroups(g); openProcessModal(m, 'process'); }}
-                        className="px-3 py-1.5 text-xs bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] transition-colors">
+                      <button disabled={busyId === m.id} onClick={async () => { setBusyId(m.id); const g = await getGroups(); setGroups(g); openProcessModal(m, 'process'); setBusyId(null); }}
+                        className="px-3 py-1.5 text-xs bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] transition-colors disabled:opacity-50">
                         ถอดเสียง
                       </button>
                     )}
                     {(m.status === 'queued' || m.status === 'failed') && (
-                      <button onClick={() => handleRetry(m.id)} title="ลองใหม่"
-                        className="p-1.5 text-[#6b7280] hover:text-[#f59e0b] transition-colors">
+                      <button disabled={busyId === m.id} onClick={() => handleRetry(m.id)} title="ลองใหม่"
+                        className="p-1.5 text-[#6b7280] hover:text-[#f59e0b] transition-colors disabled:opacity-50">
                         <RotateCcw className="w-4 h-4" />
                       </button>
                     )}
@@ -235,9 +244,10 @@ export default function MeetingPage() {
               </div>
             </div>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setProcessTarget(null)} className="px-4 py-2 text-sm text-[#6b7280] hover:bg-[#f3f4f6] rounded-lg">ยกเลิก</button>
-              <button onClick={handleProcess} className="px-4 py-2 text-sm bg-[#2563eb] text-white rounded-lg hover:bg-[#1d4ed8]">
-                {processMode === 'retranscribe' ? 'เริ่มถอดเสียงใหม่' : 'เริ่มถอดเสียง'}
+              <button onClick={() => setProcessTarget(null)} disabled={submitting} className="px-4 py-2 text-sm text-[#6b7280] hover:bg-[#f3f4f6] rounded-lg disabled:opacity-50">ยกเลิก</button>
+              <button onClick={handleProcess} disabled={submitting} className="flex items-center gap-1.5 px-4 py-2 text-sm bg-[#2563eb] text-white rounded-lg hover:bg-[#1d4ed8] disabled:opacity-50">
+                {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {submitting ? 'กำลังดำเนินการ...' : processMode === 'retranscribe' ? 'เริ่มถอดเสียงใหม่' : 'เริ่มถอดเสียง'}
               </button>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, Pencil, RefreshCw, Download, Check, XCircle } from 'lucide-react';
+import { X, Pencil, RefreshCw, Download, Check, XCircle, Loader2 } from 'lucide-react';
 import { marked } from 'marked';
 import { saveMomFull, regenerateMom, exportDocxUrl } from '../api';
 import { notify } from '../components/Notification';
@@ -379,6 +379,7 @@ function ActionTableSection({ section, onSave, speakers }) {
 export default function MomModal({ transcription, onClose, onUpdate }) {
   const [sections, setSections] = useState([]);
   const [showRegen, setShowRegen] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
 
   useEffect(() => {
     const content = transcription.mom_full || transcription.summary || '';
@@ -396,13 +397,15 @@ export default function MomModal({ transcription, onClose, onUpdate }) {
 
   async function handleRegenerate() {
     setShowRegen(false);
-    notify('กำลังสร้าง MoM ใหม่...', 'info');
-    await regenerateMom(transcription.id);
-    onUpdate?.();
-    notify('สร้าง MoM ใหม่แล้ว');
-    const res = await fetch(`/api/transcriptions/${transcription.id}`, { headers: { Authorization: `Bearer ${getToken()}` } });
-    const data = await res.json();
-    setSections(parseSections(data.mom_full || data.summary || ''));
+    setRegenerating(true);
+    try {
+      await regenerateMom(transcription.id);
+      onUpdate?.();
+      notify('สร้าง MoM ใหม่แล้ว');
+      const res = await fetch(`/api/transcriptions/${transcription.id}`, { headers: { Authorization: `Bearer ${getToken()}` } });
+      const data = await res.json();
+      setSections(parseSections(data.mom_full || data.summary || ''));
+    } finally { setRegenerating(false); }
   }
 
   return (
@@ -415,8 +418,9 @@ export default function MomModal({ transcription, onClose, onUpdate }) {
             <a href={`${exportDocxUrl(transcription.id)}?token=${localStorage.getItem('token')}`} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#2563eb] text-white rounded-lg hover:bg-[#1d4ed8] transition-colors">
               <Download className="w-3.5 h-3.5" /> Export
             </a>
-            <button onClick={() => setShowRegen(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#d1d5db] rounded-lg hover:bg-[#f3f4f6] transition-colors">
-              <RefreshCw className="w-3.5 h-3.5" /> Regenerate
+            <button disabled={regenerating} onClick={() => setShowRegen(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-[#d1d5db] rounded-lg hover:bg-[#f3f4f6] transition-colors disabled:opacity-50">
+              {regenerating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {regenerating ? 'กำลังสร้าง...' : 'Regenerate'}
             </button>
             <button onClick={onClose} className="p-1.5 hover:bg-[#f3f4f6] rounded-lg transition-colors">
               <X className="w-4 h-4 text-[#9ca3af]" />

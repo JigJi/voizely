@@ -21,6 +21,8 @@ export default function TranscriptionPage() {
   const [suggestedName, setSuggestedName] = useState('');
   const [suggestEdit, setSuggestEdit] = useState(null);
   const [savingSpeaker, setSavingSpeaker] = useState(null);
+  const [busyAction, setBusyAction] = useState(null);
+  const [audioLoading, setAudioLoading] = useState(true);
   const audioRef = useRef();
 
   useEffect(() => { loadData(); getGroups().then(setGroups); }, [id]);
@@ -100,7 +102,9 @@ export default function TranscriptionPage() {
     <div className="h-full flex flex-col">
       {/* Audio player */}
       <div className="px-6 py-3 border-b border-[#e5e7eb] bg-[#fafafa]">
-        <audio ref={audioRef} controls className="w-full h-8" src={audioStreamUrl(data.audio_file_id)} />
+        {audioLoading && <div className="flex items-center gap-2 h-8 text-xs text-[#9ca3af]"><Loader2 className="w-3.5 h-3.5 animate-spin" />กำลังโหลดเสียง...</div>}
+        <audio ref={audioRef} controls className={`w-full h-8 ${audioLoading ? 'hidden' : ''}`} src={audioStreamUrl(data.audio_file_id)}
+          onCanPlay={() => setAudioLoading(false)} onWaiting={() => setAudioLoading(true)} onPlaying={() => setAudioLoading(false)} />
         <div className="flex items-center gap-2 mt-1 text-xs text-[#9ca3af]">
           <EditableText value={data.original_filename} onSave={v => {}} />
           <span>·</span>
@@ -121,8 +125,9 @@ export default function TranscriptionPage() {
         <div className="flex-1" />
         <div className="flex gap-2">
           <button onClick={() => setShowFindReplace(!showFindReplace)} className="px-3 py-1.5 text-xs border border-[#d1d5db] rounded-md hover:bg-[#f3f4f6] transition-colors">ค้นหา/แก้คำ</button>
-          <button onClick={async () => { const r = await applyCorrections(id); notify(`แก้ไข ${r.count} จุด`); if (r.count > 0) loadData(); }}
-            className="px-3 py-1.5 text-xs border border-[#d1d5db] rounded-md hover:bg-[#f3f4f6] transition-colors">Correction</button>
+          <button disabled={busyAction === 'correction'} onClick={async () => { setBusyAction('correction'); try { const r = await applyCorrections(id); notify(`แก้ไข ${r.count} จุด`); if (r.count > 0) loadData(); } finally { setBusyAction(null); } }}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs border border-[#d1d5db] rounded-md hover:bg-[#f3f4f6] transition-colors disabled:opacity-50">
+            {busyAction === 'correction' && <Loader2 className="w-3 h-3 animate-spin" />}Correction</button>
           <button onClick={() => setShowMom(true)} className="px-3 py-1.5 text-xs bg-[#2563eb] text-white rounded-md hover:bg-[#1d4ed8] transition-colors">MoM</button>
         </div>
       </div>
@@ -142,8 +147,8 @@ export default function TranscriptionPage() {
           {/* Group */}
           <div className="mb-5">
             <div className="text-sm font-medium text-[#6b7280] mb-1.5">กลุ่ม</div>
-            <select value={data.group_id || ''} onChange={async (e) => { await assignGroup(id, parseInt(e.target.value)); notify('ย้ายกลุ่มแล้ว'); loadData(); }}
-              className="w-full px-3 py-2 text-sm border border-[#e5e7eb] rounded-lg focus:outline-none focus:border-[#2563eb]">
+            <select value={data.group_id || ''} disabled={busyAction === 'group'} onChange={async (e) => { setBusyAction('group'); try { await assignGroup(id, parseInt(e.target.value)); notify('ย้ายกลุ่มแล้ว'); loadData(); } finally { setBusyAction(null); } }}
+              className="w-full px-3 py-2 text-sm border border-[#e5e7eb] rounded-lg focus:outline-none focus:border-[#2563eb] disabled:opacity-50">
               {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           </div>
@@ -381,6 +386,7 @@ function SpeakerDropdown({ name, onSelect, saving, disabled }) {
   const [showNew, setShowNew] = useState(false);
   const [newName, setNewName] = useState('');
   const [search, setSearch] = useState('');
+  const [tab, setTab] = useState('ad');
   const dropRef = useRef();
 
   useEffect(() => {
@@ -415,6 +421,10 @@ function SpeakerDropdown({ name, onSelect, saving, disabled }) {
     }
   }
 
+  const filtered = speakers
+    .filter(s => s.source === tab || (!s.source && tab === 'manual'))
+    .filter(s => !search || s.nickname.toLowerCase().includes(search.toLowerCase()) || (s.full_name || '').toLowerCase().includes(search.toLowerCase()));
+
   return (
     <div className="relative" ref={dropRef}>
       <span className={`transition-colors text-sm inline-flex items-center gap-1 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:text-[#2563eb]'}`}
@@ -423,7 +433,18 @@ function SpeakerDropdown({ name, onSelect, saving, disabled }) {
         {saving && <Loader2 className="w-3 h-3 animate-spin text-[#2563eb]" />}
       </span>
       {open && (
-        <div className="absolute top-6 left-0 z-50 bg-white border border-[#e5e7eb] rounded-lg shadow-lg w-[200px] py-1">
+        <div className="absolute top-6 left-0 z-50 bg-white border border-[#e5e7eb] rounded-lg shadow-lg w-[220px] py-1">
+          {/* Tabs */}
+          <div className="flex border-b border-[#e5e7eb] mx-2 mb-1">
+            <button onClick={() => setTab('ad')}
+              className={`flex-1 py-1.5 text-[11px] font-medium border-b-2 transition-colors ${tab === 'ad' ? 'text-[#2563eb] border-[#2563eb]' : 'text-[#9ca3af] border-transparent'}`}>
+              Internal
+            </button>
+            <button onClick={() => setTab('manual')}
+              className={`flex-1 py-1.5 text-[11px] font-medium border-b-2 transition-colors ${tab === 'manual' ? 'text-[#2563eb] border-[#2563eb]' : 'text-[#9ca3af] border-transparent'}`}>
+              External
+            </button>
+          </div>
           {/* Search */}
           <div className="px-2 py-1">
             <input autoFocus value={search} onChange={e => setSearch(e.target.value)}
@@ -434,38 +455,41 @@ function SpeakerDropdown({ name, onSelect, saving, disabled }) {
           <div className="max-h-[200px] overflow-y-auto">
             {(() => {
               const nickCount = {};
-              speakers.forEach(s => { nickCount[s.nickname] = (nickCount[s.nickname] || 0) + 1; });
-              const filtered = speakers.filter(s => !search || s.nickname.toLowerCase().includes(search.toLowerCase()) || (s.full_name || '').toLowerCase().includes(search.toLowerCase()));
-              return filtered.map(s => {
+              filtered.forEach(s => { nickCount[s.nickname] = (nickCount[s.nickname] || 0) + 1; });
+              return filtered.length ? filtered.map(s => {
                 const isDup = nickCount[s.nickname] > 1;
-                const hint = isDup ? (s.department || s.full_name || `#${s.id}`) : (s.full_name || '');
+                const hint = [s.department, s.organization ? `(${s.organization})` : ''].filter(Boolean).join(' ') || s.full_name || '';
                 return (
                   <button key={s.id} onClick={() => { onSelect(s.nickname); setOpen(false); setSearch(''); }}
                     className="w-full text-left px-3 py-1.5 text-sm hover:bg-[#f3f4f6] transition-colors flex items-center justify-between">
                     <span className="truncate">{s.nickname}</span>
-                    {hint && <span className="text-[10px] text-[#9ca3af] ml-1 truncate max-w-[60px]">{hint}</span>}
+                    {hint && <span className="text-[10px] text-[#9ca3af] ml-1 truncate max-w-[80px]">{hint}</span>}
                   </button>
                 );
-              });
+              }) : <div className="px-3 py-3 text-xs text-[#9ca3af] text-center">{search ? 'ไม่พบ' : 'ยังไม่มีรายการ'}</div>;
             })()}
           </div>
-          <div className="border-t border-[#e5e7eb] my-1" />
-          {!showNew ? (
-            <button onClick={() => setShowNew(true)}
-              className="w-full text-left px-3 py-1.5 text-sm text-[#2563eb] hover:bg-[#eff6ff] transition-colors">
-              + เพิ่มผู้พูดใหม่
-            </button>
-          ) : (
-            <div className="px-2 py-1.5">
-              <div className="flex gap-1">
-                <input autoFocus value={newName} onChange={e => { setNewName(e.target.value); setNewError(''); }}
-                  onKeyDown={e => { if (e.key === 'Enter') handleNewSpeaker(); if (e.key === 'Escape') { setShowNew(false); setNewName(''); setNewError(''); } }}
-                  placeholder="ชื่อเรียก"
-                  className={`min-w-0 flex-1 px-2 py-1 text-xs border rounded focus:outline-none ${newError ? 'border-[#ef4444]' : 'border-[#d1d5db] focus:border-[#2563eb]'}`} />
-                <button onClick={handleNewSpeaker} className="px-1.5 py-1 text-[10px] bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] shrink-0">ตกลง</button>
-              </div>
-              {newError && <div className="text-[10px] text-[#ef4444] mt-1">{newError}</div>}
-            </div>
+          {tab === 'manual' && (
+            <>
+              <div className="border-t border-[#e5e7eb] my-1" />
+              {!showNew ? (
+                <button onClick={() => setShowNew(true)}
+                  className="w-full text-left px-3 py-1.5 text-sm text-[#2563eb] hover:bg-[#eff6ff] transition-colors">
+                  + เพิ่มผู้พูดใหม่
+                </button>
+              ) : (
+                <div className="px-2 py-1.5">
+                  <div className="flex gap-1">
+                    <input autoFocus value={newName} onChange={e => { setNewName(e.target.value); setNewError(''); }}
+                      onKeyDown={e => { if (e.key === 'Enter') handleNewSpeaker(); if (e.key === 'Escape') { setShowNew(false); setNewName(''); setNewError(''); } }}
+                      placeholder="ชื่อเรียก"
+                      className={`min-w-0 flex-1 px-2 py-1 text-xs border rounded focus:outline-none ${newError ? 'border-[#ef4444]' : 'border-[#d1d5db] focus:border-[#2563eb]'}`} />
+                    <button onClick={handleNewSpeaker} className="px-1.5 py-1 text-[10px] bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8] shrink-0">ตกลง</button>
+                  </div>
+                  {newError && <div className="text-[10px] text-[#ef4444] mt-1">{newError}</div>}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
