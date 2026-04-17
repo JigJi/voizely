@@ -648,9 +648,21 @@ def apply_corrections(transcription_id: int, db: Session = Depends(get_db), curr
 @router.get("/api/speakers")
 def list_speakers(source: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
+    from sqlalchemy import or_
     q = db.query(SpeakerProfile)
     if source:
         q = q.filter(SpeakerProfile.source == source)
+    # Manual speakers: show only current user's (+ legacy ones without user_id)
+    # AD speakers: show all
+    if source == "manual":
+        q = q.filter(or_(SpeakerProfile.user_id == current_user.id, SpeakerProfile.user_id == None))
+    elif not source:
+        # No filter: AD all + manual only current user's
+        q = q.filter(or_(
+            SpeakerProfile.source == "ad",
+            SpeakerProfile.user_id == current_user.id,
+            SpeakerProfile.user_id == None,
+        ))
     profiles = q.order_by(SpeakerProfile.nickname).all()
     return [{
         "id": p.id,
@@ -673,11 +685,15 @@ async def create_speaker(request: Request, db: Session = Depends(get_db), curren
     nickname = body.get("nickname", "").strip()
     if not nickname:
         raise HTTPException(status_code=400, detail="Missing nickname")
-    existing = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == nickname).first()
+    existing = db.query(SpeakerProfile).filter(
+        SpeakerProfile.nickname == nickname,
+        SpeakerProfile.user_id == current_user.id,
+    ).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"ชื่อ '{nickname}' มีอยู่แล้ว กรุณาใช้ชื่ออื่น")
     p = SpeakerProfile(
         nickname=nickname,
+        user_id=current_user.id,
         email=body.get("email", ""),
         full_name=body.get("full_name", ""),
         organization=body.get("organization", ""),
@@ -700,12 +716,14 @@ async def update_speaker(speaker_id: int, request: Request, db: Session = Depend
         raise HTTPException(status_code=404, detail="Not found")
     if getattr(p, 'source', 'manual') == 'ad':
         raise HTTPException(status_code=403, detail="ข้อมูลพนักงานจาก AD ไม่สามารถแก้ไขได้")
+    if p.user_id and p.user_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Access denied")
     for key in ["nickname", "email", "full_name", "organization", "department", "position"]:
         if key in body:
             if key == "nickname":
                 new_nick = body[key].strip()
                 if new_nick and new_nick != p.nickname:
-                    dup = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == new_nick, SpeakerProfile.id != speaker_id).first()
+                    dup = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == new_nick, SpeakerProfile.id != speaker_id, SpeakerProfile.user_id == current_user.id).first()
                     if dup:
                         raise HTTPException(status_code=400, detail=f"ชื่อ '{new_nick}' มีอยู่แล้ว กรุณาใช้ชื่ออื่น")
             setattr(p, key, body[key])
@@ -722,6 +740,8 @@ def delete_speaker(speaker_id: int, db: Session = Depends(get_db), current_user:
         raise HTTPException(status_code=404, detail="Not found")
     if getattr(p, 'source', 'manual') == 'ad':
         raise HTTPException(status_code=403, detail="ข้อมูลพนักงานจาก AD ไม่สามารถลบได้")
+    if p.user_id and p.user_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Access denied")
     db.delete(p)
     db.commit()
     return {"ok": True}

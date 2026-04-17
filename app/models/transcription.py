@@ -134,6 +134,7 @@ class SpeakerProfile(Base):
     embedding: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
     total_seconds: Mapped[float] = mapped_column(Float, default=0)
     num_sessions: Mapped[int] = mapped_column(Integer, default=0)
+    user_id: Mapped[int | None] = mapped_column(Integer, sa.ForeignKey("users.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(sa.Boolean, default=True, nullable=False, server_default=sa.true())
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7)))
