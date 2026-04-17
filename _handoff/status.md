@@ -1,6 +1,6 @@
 # Handoff Status
 
-**Current:** `WAITING_FRONTEND`
+**Current:** `WAITING_BACKEND`
 
 ## History
 

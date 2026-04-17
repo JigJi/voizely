@@ -1,46 +1,33 @@
 import { useState, useEffect, useRef } from 'react';
 import { Check } from 'lucide-react';
 
-// Gemini worker: diarize → voiceprint → transcribe → analyze
-const STEPS_GEMINI = [
-  { pct: 5, name: 'แยกผู้พูด', sub: 'Diarization' },
-  { pct: 25, name: 'จับคู่เสียง', sub: 'Voiceprint' },
-  { pct: 35, name: 'ถอดเสียง', sub: 'Transcription' },
-  { pct: 85, name: 'สรุป MoM', sub: 'Analysis' },
-];
-
-// Whisper worker: transcribe → diarize → voiceprint → analyze
-const STEPS_WHISPER = [
-  { pct: 1, name: 'ถอดเสียง', sub: 'Transcription' },
-  { pct: 82, name: 'แยกผู้พูด', sub: 'Diarization' },
-  { pct: 93, name: 'จับคู่เสียง', sub: 'Voiceprint' },
-  { pct: 95, name: 'สรุป MoM', sub: 'Analysis' },
+const STEPS = [
+  { pct: 5,  name: 'ถอดเสียง',    sub: 'Deepgram' },
+  { pct: 30, name: 'แยกผู้พูด',   sub: 'Diarization' },
+  { pct: 50, name: 'แก้ไขข้อความ', sub: 'Gemini' },
+  { pct: 85, name: 'สรุป MoM',    sub: 'Analysis' },
 ];
 
 export default function ProgressSteps({ progress = 0, statusMessage = '' }) {
-  // Smooth progress animation — ค่อยๆ ขยับระหว่าง step
   const [displayProgress, setDisplayProgress] = useState(progress);
+  const maxRef = useRef(progress);
   const timerRef = useRef(null);
 
   useEffect(() => {
-    // When real progress jumps, animate smoothly toward it
+    const target = Math.max(progress, maxRef.current);
+    maxRef.current = target;
+
     if (timerRef.current) clearInterval(timerRef.current);
-    if (progress > displayProgress) {
+    if (target > displayProgress) {
       timerRef.current = setInterval(() => {
         setDisplayProgress(prev => {
-          if (prev >= progress - 0.5) { clearInterval(timerRef.current); return progress; }
+          if (prev >= target - 0.5) { clearInterval(timerRef.current); return target; }
           return prev + 0.3;
         });
       }, 100);
-    } else {
-      setDisplayProgress(progress);
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [progress]);
-
-  // Auto-detect which worker based on status message
-  const isGemini = statusMessage.includes('Gemini') || statusMessage.includes('Voiceprint') || statusMessage.includes('แยกผู้พูด');
-  const STEPS = displayProgress <= 30 && isGemini ? STEPS_GEMINI : displayProgress > 50 ? STEPS_WHISPER : STEPS_GEMINI;
   return (
     <div className="flex items-center justify-center h-full">
       <div className="w-full max-w-2xl px-12">

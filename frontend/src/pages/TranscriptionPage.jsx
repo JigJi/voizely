@@ -28,9 +28,19 @@ export default function TranscriptionPage() {
   useEffect(() => {
     if (!data || data.status === 'completed') return;
     const interval = setInterval(async () => {
-      const p = await getProgress(id);
-      if (p.status !== data.status) loadData();
-      else setData(prev => prev ? { ...prev, ...p } : prev);
+      try {
+        const p = await getProgress(id);
+        if (p.status !== data.status) {
+          setData(prev => prev ? { ...prev, status: p.status, progress_percent: Math.max(p.progress_percent || 0, prev.progress_percent || 0), status_message: p.status_message } : prev);
+          loadDataSilent();
+        } else {
+          setData(prev => {
+            if (!prev) return prev;
+            const pct = Math.max(p.progress_percent || 0, prev.progress_percent || 0);
+            return { ...prev, ...p, progress_percent: pct };
+          });
+        }
+      } catch {}
     }, 2000);
     return () => clearInterval(interval);
   }, [data?.status, id]);

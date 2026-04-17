@@ -36,6 +36,11 @@ export default function MeetingPage() {
     setLoading(true);
     try {
       const [m, g] = await Promise.all([getMeetings(), getGroups()]);
+      m.sort((a, b) => {
+        const ta = a.meeting_start_time || a.discovered_at || '';
+        const tb = b.meeting_start_time || b.discovered_at || '';
+        return tb.localeCompare(ta);
+      });
       setMeetings(m);
       setGroups(g);
     } catch (e) { notify('โหลดข้อมูลไม่ได้', 'error'); }

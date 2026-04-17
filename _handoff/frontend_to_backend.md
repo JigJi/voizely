@@ -543,3 +543,40 @@ candidate causes
 ### Status
 
 `WAITING_BACKEND` รอคุณ paste audit log + DB state กลับมา
+
+---
+
+## [2026-04-17] FROM: frontend
+
+### สิ่งที่ต้องทำฝั่ง backend (1 อย่าง)
+
+#### Auto-create กลุ่มทั่วไป (default group)
+
+หลังรัน `wipe_all.py` กลุ่ม "ทั่วไป" (`is_default=True`) ถูกลบไป ทำให้ transcription ที่ `group_id=NULL` ไม่ขึ้น sidebar ฝั่ง frontend
+
+**แก้แล้วใน `app/routers/group.py`** — เพิ่ม auto-create ที่ต้นของ `list_groups()`:
+
+```python
+default = db.query(TranscriptionGroup).filter(TranscriptionGroup.is_default == True).first()
+if not default:
+    default = TranscriptionGroup(name="ทั่วไป", is_default=True, sort_order=9999)
+    db.add(default)
+    db.commit()
+    db.refresh(default)
+```
+
+**สิ่งที่ต้องทำ:**
+1. `git pull` เพื่อรับ code ใหม่
+2. Restart FastAPI (ผ่าน Task Scheduler / bat ตามปกติ)
+3. ยืนยันว่า `/api/groups` return กลุ่ม "ทั่วไป" (`is_default: true`)
+4. Transcription ID 149 ที่ `group_id=NULL` ควรขึ้นใน sidebar ภายใต้กลุ่ม "ทั่วไป" ทันที
+
+### สิ่งที่ frontend แก้ไปแล้ว (ไม่ต้องทำอะไรฝั่ง backend)
+
+1. **Meeting เรียงใหม่ก่อน** — sort by `meeting_start_time` desc
+2. **Progress steps ไม่กระโดดถอยหลัง** — ใช้ step เดียวที่ตรงกับ backend จริง (5/30/50/85%) + enforce monotonic progress
+3. **ถอดเสร็จแล้วไม่พัง** — เมื่อ poll ตรวจพบ status เปลี่ยน จะ update state ทันที (หยุด poll loop) แล้วค่อย fetch full data ทีหลัง
+
+### Status
+
+`WAITING_BACKEND` — รอ pull + restart เพื่อให้ default group ถูกสร้างอัตโนมัติ
