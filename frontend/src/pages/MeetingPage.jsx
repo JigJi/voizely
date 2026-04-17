@@ -137,6 +137,7 @@ export default function MeetingPage() {
                     <div className="flex items-center gap-4 text-xs text-[#9ca3af]">
                       <span>{m.meeting_organizer}</span>
                       <span>{formatDate(m.meeting_start_time || m.discovered_at)}</span>
+                      {m.duration_seconds > 0 && <span>{Math.round(m.duration_seconds / 60)} นาที</span>}
                       {m.file_size_mb && <span>{m.file_size_mb} MB</span>}
                       {m.processed_by_name && (
                         <span className="text-[#6b7280]">ถอดโดย {m.processed_by_name}</span>

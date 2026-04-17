@@ -612,3 +612,51 @@ venv\Scripts\python.exe ad_sync_job.py
 ### Status
 
 `WAITING_BACKEND` — รอ pull + restart + รัน AD sync ใหม่
+
+---
+
+## [2026-04-17 #3] FROM: frontend
+
+### สิ่งที่ต้องทำฝั่ง backend (3 อย่าง)
+
+#### 1. Audio streaming: รองรับ Range requests (seek ไม่ได้)
+
+ตอนนี้ user เลื่อน seek bar ใน audio player ไม่ได้ — กดแล้วเด้งกลับมาที่เดิม ไฟล์ใหญ่โหลดช้ามาก/เล่นไม่ได้
+
+**ต้นเหตุ:** `GET /api/audio/{id}/stream` ใช้ `FileResponse` ซึ่ง Starlette รองรับ Range requests อยู่แล้ว แต่ผ่าน Tailscale Funnel มาอาจมีปัญหา
+
+**แนะนำแก้:**
+- ตรวจสอบว่า `FileResponse` ส่ง `Accept-Ranges: bytes` header กลับมาจริง
+- ทดสอบ: `curl -I https://voizely-backend.tailb8d083.ts.net/api/audio/XX/stream` ดูว่ามี `Accept-Ranges: bytes` ไหม
+- ทดสอบ seek: `curl -H "Range: bytes=1000000-1000100" https://voizely-backend.tailb8d083.ts.net/api/audio/XX/stream -o /dev/null -w "%{http_code}"` ควรได้ 206
+- ถ้า Tailscale Funnel strip Range header ออก อาจต้องเปลี่ยนจาก `FileResponse` เป็น manual `StreamingResponse` ที่ parse `Range` header เอง
+
+**ปัญหาเพิ่ม — ไฟล์ใหญ่โหลดช้าผ่าน tunnel:**
+- ไฟล์ Teams recording 1 ชม. = 100+ MB ผ่าน Tailscale Funnel ช้ามาก
+- แนะนำ: ตอน process เสร็จ ให้ **แปลง audio เป็น mp3/opus bitrate ต่ำ** (เช่น 64kbps mono — ไฟล์ 1 ชม. ≈ 30 MB) เก็บคู่กับไฟล์ต้นฉบับ ใช้ไฟล์เล็กสำหรับ playback ไฟล์เดิมเก็บไว้สำหรับ re-transcribe
+- ffmpeg: `ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 -b:a 64k output.mp3`
+- เพิ่ม field `playback_file_path` ใน `AudioFile` model หรือ convention ง่ายๆ เช่น `{file_path}.playback.mp3`
+- endpoint stream ให้ prefer ไฟล์ playback ถ้ามี fallback ไฟล์เดิม
+
+#### 2. Meeting: ส่ง duration_seconds ใน response
+
+แก้แล้วใน `app/routers/meeting.py` — เพิ่ม `duration_seconds` จาก `audio_files` table ใน meeting list response Frontend แสดง "X นาที" แล้ว รอ backend pull
+
+#### 3. Smart mode: บันทึกว่าเลือก model อะไร
+
+แก้แล้วใน `gemini_worker.py` — เมื่อ smart mode ตัดสินใจแล้ว จะเปลี่ยน `model_size` จาก `smart+gemini` เป็น:
+- `smart(spectral)+gemini` — ถ้าเลือก Spectral Clustering
+- `smart(deepgram)+gemini` — ถ้าเลือก Deepgram diarization
+
+Frontend แสดงวงเล็บตรงค่าใช้จ่ายแล้ว (เช่น "Smart (Spectral)")
+
+### สิ่งที่ frontend แก้แล้ว
+
+1. **nginx: forward Range headers** — เพิ่ม `proxy_set_header Range` + `If-Range` แล้ว reload แล้ว
+2. **Timeline click ไม่เด้ง** — save/restore scroll position ตอนกด play
+3. **Meeting แสดงนาที** — แสดง duration ถ้า backend ส่งมา
+4. **ค่าใช้จ่าย แสดง Smart (Spectral/Deepgram)** — แยกแสดงว่า smart เลือกอะไร
+
+### Status
+
+`WAITING_BACKEND` — รอ pull + restart + แก้ audio streaming

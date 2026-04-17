@@ -571,10 +571,12 @@ def _meeting_to_dict(m: MeetingRecording, db: Session) -> dict:
                 db.commit()
 
     file_size_mb = None
+    duration_seconds = None
     if m.audio_file_id:
         audio = db.query(AudioFile).filter(AudioFile.id == m.audio_file_id).first()
         if audio:
             file_size_mb = round(audio.file_size_bytes / 1024 / 1024, 1) if audio.file_size_bytes else None
+            duration_seconds = audio.duration_seconds
 
     # Parse attendees from JSON text
     attendees = []
@@ -604,6 +606,7 @@ def _meeting_to_dict(m: MeetingRecording, db: Session) -> dict:
         "transcription_status": transcription_status,
         "transcription_progress": transcription_progress,
         "file_size_mb": file_size_mb,
+        "duration_seconds": duration_seconds,
         "file_name": metadata.get("file_name"),
         "discovered_at": m.discovered_at.isoformat() if m.discovered_at else None,
         "processed_by": m.processed_by,

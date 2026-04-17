@@ -1292,9 +1292,14 @@ def _process_spectral(db, t, file_path, transcription_id, start_time, mode="spec
             segments = _spectral_diarize(file_path, utterances, n_clusters=4)
         logger.info("#%d Spectral: %d segments, %d speakers",
                     transcription_id, len(segments), len(set(s["speaker"] for s in segments)))
+        if mode == "smart":
+            t.model_size = "smart(spectral)+gemini"
+            db.commit()
     else:
         t.progress_percent = 50
         t.status_message = "ใช้ผู้พูดจาก Deepgram diarization..."
+        if mode == "smart":
+            t.model_size = "smart(deepgram)+gemini"
         db.commit()
         segments = _build_segments_from_deepgram(utterances)
         logger.info("#%d Deepgram-speakers: %d segments, %d speakers",

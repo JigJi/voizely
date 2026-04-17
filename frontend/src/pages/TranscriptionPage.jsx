@@ -206,7 +206,12 @@ export default function TranscriptionPage() {
             <div className="pt-4 border-t border-[#e5e7eb]">
               <div className="text-xs font-medium text-[#9ca3af] mb-1">ค่าใช้จ่าย</div>
               <div className="space-y-1.5 text-xs">
-                <div className="flex justify-between"><span className="text-[#9ca3af]">{{'deepgram': 'Deepgram', 'spectral': 'Deepgram + Spectral', 'pyannote': 'Pyannote', 'gemini': 'Gemini'}[data.model_size?.split('+')[0]] || data.model_size?.split('+')[0]}</span><span>{((data.deepgram_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
+                <div className="flex justify-between"><span className="text-[#9ca3af]">{(() => {
+                  const m = data.model_size || '';
+                  const labels = {'deepgram': 'Deepgram', 'spectral': 'Deepgram + Spectral', 'pyannote': 'Pyannote', 'gemini': 'Gemini',
+                    'smart(spectral)': 'Smart (Spectral)', 'smart(deepgram)': 'Smart (Deepgram)', 'smart': 'Smart'};
+                  return labels[m.split('+')[0]] || m.split('+')[0];
+                })()}</span><span>{((data.deepgram_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
                 <div className="flex justify-between"><span className="text-[#9ca3af]">Gemini</span><span>{((data.gemini_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
                 <div className="flex justify-between font-medium border-t border-[#e5e7eb] pt-1 mt-1"><span>รวม</span><span>{((data.total_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
               </div>
@@ -333,7 +338,14 @@ function TimelineContent({ data, colorMap, audioRef }) {
       <div className="space-y-0.5">
         {data.segments.map((seg, i) => (
           <div key={i} className={`flex gap-3 py-2 rounded-md px-2 transition-colors cursor-pointer group ${i === activeIdx ? 'bg-[#eff6ff] border-l-2 border-[#2563eb]' : 'hover:bg-[#f9fafb]'}`}
-            onClick={() => { if (audioRef?.current) { audioRef.current.currentTime = seg.start_time; audioRef.current.play(); } }}>
+            onClick={(e) => {
+              if (!audioRef?.current) return;
+              const scrollParent = e.currentTarget.closest('.overflow-auto');
+              const scrollTop = scrollParent?.scrollTop;
+              audioRef.current.currentTime = seg.start_time;
+              audioRef.current.play();
+              if (scrollParent != null) requestAnimationFrame(() => { scrollParent.scrollTop = scrollTop; });
+            }}>
             <div className="text-sm text-[#9ca3af] w-16 shrink-0 pt-0.5 font-mono">
               {Math.floor(seg.start_time / 60)}:{String(Math.floor(seg.start_time % 60)).padStart(2, '0')}
             </div>
