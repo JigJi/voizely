@@ -851,6 +851,7 @@ def _call_gemini(prompt, max_tokens=8000, timeout=120):
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0,
+        "reasoning": {"effort": "none"},
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -1000,6 +1001,7 @@ def generate_analysis(transcript_text, custom_instructions=None, meeting_date=No
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0,
+        "reasoning": {"effort": "none"},
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -1050,6 +1052,7 @@ def generate_analysis(transcript_text, custom_instructions=None, meeting_date=No
                     "messages": [{"role": "user", "content": prompt + "\n\nสำคัญมาก: ตอบเป็น valid JSON เท่านั้น ห้ามใส่ double quote ในข้อความ ใช้ single quote แทน"}],
                     "max_tokens": max_tokens,
                     "temperature": 0,
+                    "reasoning": {"effort": "none"},
                 }).encode("utf-8")
                 req2 = urllib.request.Request(
                     "https://openrouter.ai/api/v1/chat/completions",

@@ -539,9 +539,13 @@ def regenerate_mom(transcription_id: int, db: Session = Depends(get_db), current
         if group and group.custom_instructions:
             custom_instructions = group.custom_instructions
 
+    from gemini_worker import _fix_mom_style
     analysis = generate_analysis(transcript_text, custom_instructions, meeting_date=t.created_at.strftime("%d/%m/%Y"))
+    if not analysis or not analysis.get("mom"):
+        raise HTTPException(status_code=502, detail="MoM generation failed — Gemini returned empty result")
     speaker_names = list(dict.fromkeys(seg.speaker for seg in segments))
-    mom = _strip_names_from_mom(analysis.get("mom", ""), speaker_names)
+    mom = _fix_mom_style(analysis.get("mom", ""))
+    mom = _strip_names_from_mom(mom, speaker_names)
     t.summary = mom
     t.auto_title = analysis.get("title", t.auto_title or "")
     t.summary_short = analysis.get("summary_short", "")
