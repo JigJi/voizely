@@ -652,16 +652,15 @@ def list_speakers(source: str | None = None, db: Session = Depends(get_db), curr
     q = db.query(SpeakerProfile)
     if source:
         q = q.filter(SpeakerProfile.source == source)
-    # Manual speakers: show only current user's (+ legacy ones without user_id)
+    # Manual speakers: show only current user's
     # AD speakers: show all
     if source == "manual":
-        q = q.filter(or_(SpeakerProfile.user_id == current_user.id, SpeakerProfile.user_id == None))
+        q = q.filter(SpeakerProfile.user_id == current_user.id)
     elif not source:
         # No filter: AD all + manual only current user's
         q = q.filter(or_(
             SpeakerProfile.source == "ad",
             SpeakerProfile.user_id == current_user.id,
-            SpeakerProfile.user_id == None,
         ))
     profiles = q.order_by(SpeakerProfile.nickname).all()
     return [{
