@@ -78,6 +78,22 @@ from app.models.transcription import (
 )
 from app.config import settings
 
+import re as _re
+
+_THAI_PREFIXES = _re.compile(r'^(พี่|น้อง|นาย|นาง|นางสาว|คุณ|เธอ|ฉัน|กู|มึง|แก|ท่าน|อาจารย์|หมอ|ดร\.|ผม)')
+
+def _clean_suggested_name(name: str) -> str | None:
+    n = _THAI_PREFIXES.sub('', name).strip()
+    return n if n else None
+
+def _clean_speaker_suggestions(suggestions: list) -> list:
+    cleaned = []
+    for s in suggestions:
+        name = _clean_suggested_name(s.get("suggested_name", ""))
+        if name:
+            cleaned.append({**s, "suggested_name": name})
+    return cleaned
+
 
 # === Pyannote Model (loaded once) ===
 
@@ -1392,7 +1408,7 @@ def _process_spectral(db, t, file_path, transcription_id, start_time, mode="spec
         t.action_items = json.dumps(analysis.get("action_items", []), ensure_ascii=False)
         t.key_decisions = json.dumps(analysis.get("key_decisions", []), ensure_ascii=False)
         t.open_questions = json.dumps(analysis.get("open_questions", []), ensure_ascii=False)
-        t.speaker_suggestions = json.dumps(analysis.get("speaker_suggestions", []), ensure_ascii=False)
+        t.speaker_suggestions = json.dumps(_clean_speaker_suggestions(analysis.get("speaker_suggestions", [])), ensure_ascii=False)
         t.deepgram_confidence = round(analysis.get("audio_quality", 0) / 100, 4)
     except Exception as e:
         logger.warning("#%d Analysis failed: %s", transcription_id, e)
@@ -1630,7 +1646,7 @@ def _process_gemini_single(db, t, file_path, transcription_id, start_time):
         t.action_items = json.dumps(analysis.get("action_items", []), ensure_ascii=False)
         t.key_decisions = json.dumps(analysis.get("key_decisions", []), ensure_ascii=False)
         t.open_questions = json.dumps(analysis.get("open_questions", []), ensure_ascii=False)
-        t.speaker_suggestions = json.dumps(analysis.get("speaker_suggestions", []), ensure_ascii=False)
+        t.speaker_suggestions = json.dumps(_clean_speaker_suggestions(analysis.get("speaker_suggestions", [])), ensure_ascii=False)
         t.deepgram_confidence = round(analysis.get("audio_quality", 0) / 100, 4)
     except Exception as e:
         logger.warning("#%d Analysis failed: %s", transcription_id, e)
@@ -1818,7 +1834,7 @@ def process_transcription(transcription_id):
             t.action_items = json.dumps(analysis.get("action_items", []), ensure_ascii=False)
             t.key_decisions = json.dumps(analysis.get("key_decisions", []), ensure_ascii=False)
             t.open_questions = json.dumps(analysis.get("open_questions", []), ensure_ascii=False)
-            t.speaker_suggestions = json.dumps(analysis.get("speaker_suggestions", []), ensure_ascii=False)
+            t.speaker_suggestions = json.dumps(_clean_speaker_suggestions(analysis.get("speaker_suggestions", [])), ensure_ascii=False)
             t.deepgram_confidence = round(analysis.get("audio_quality", 0) / 100, 4)
         except Exception as e:
             logger.warning("#%d Analysis failed: %s", transcription_id, e)
