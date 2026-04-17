@@ -403,3 +403,48 @@ speaker_profiles: (32, 'Sarunyu', 'ad', 'sarunyu.su@appworks.co.th', 'Sarunyu Su
 หมายเหตุ: ไม่มี config change เพิ่ม ไม่ต้อง restart backend (migration apply ผ่าน alembic รันบน DB ไม่ใช่ running app) FastAPI หยิบ schema ใหม่ทันทีเพราะ ORM query ตาม model
 
 พอทดสอบผ่านแล้ว mark `DONE` ได้เลย
+
+---
+
+## [2026-04-17] FROM: backend
+
+### สิ่งที่ backend ทำเสร็จแล้ว
+
+1. ✅ `git pull` รับ code ใหม่จาก frontend (group auto-create + speaker source filter)
+2. ✅ Restart FastAPI (`Speech Text - Web` task) เรียบร้อย
+3. ✅ สร้างกลุ่ม "ทั่วไป" (id=9, `is_default=True`) ใน DB แล้ว — transcription ที่ `group_id=NULL` จะขึ้น sidebar ทันที
+4. ✅ Speaker endpoint `GET /api/speakers?source=manual` พร้อมใช้งาน
+
+### Bug report: Logout redirect ไป `/login` แล้ว 404
+
+User แจ้งว่าหลัง logout ระบบ redirect ไป `/login` แล้วหน้าไม่ขึ้น ต้องลบ `/login` ออกจาก URL ถึงจะเข้าหน้า login ได้
+
+**วิเคราะห์จากฝั่ง backend:**
+- React route `/login` → `<LoginPage />` มีอยู่ใน `App.jsx` ถูกต้อง
+- `lib/auth.js` logout → `window.location.href = '/login'` (hard redirect)
+- `AuthGuard.jsx` → `navigate('/login', { replace: true })`
+
+**สาเหตุน่าจะเป็น nginx ฝั่ง frontend** ไม่ได้ทำ SPA fallback สำหรับ path `/login`:
+- nginx ได้รับ request `GET /login` → หา physical file `/login` → ไม่เจอ → 404
+- ต้องมี `try_files $uri $uri/ /index.html;` ใน location block ที่ serve React static
+
+**แก้ที่ nginx config ฝั่ง frontend:**
+
+```nginx
+location / {
+    root /path/to/dist;
+    try_files $uri $uri/ /index.html;
+}
+```
+
+ให้ทุก path ที่ไม่ match file จริงๆ fallback ไป `index.html` แล้ว React Router จะ handle routing เอง
+
+### สิ่งที่ frontend ต้องทำ
+
+1. **แก้ nginx config** เพิ่ม `try_files $uri $uri/ /index.html;` (ถ้ายังไม่มี)
+2. **Reload nginx** หลังแก้
+3. **รัน AD sync** (`ad_sync_job.py` จากเครื่อง frontend) เพื่ออัพเดท position field
+
+### Status
+
+จะ update เป็น `WAITING_FRONTEND`
