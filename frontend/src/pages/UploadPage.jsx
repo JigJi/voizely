@@ -4,10 +4,12 @@ import { Upload, FileAudio } from 'lucide-react';
 import { getGroups } from '../api';
 import { getToken } from '../lib/auth';
 import { notify } from '../components/Notification';
+import ProgressSteps from '../components/ProgressSteps';
 
 export default function UploadPage() {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [groups, setGroups] = useState([]);
   const [form, setForm] = useState({ group_id: '', diarization_model: 'smart', transcription_model: 'gemini' });
@@ -22,23 +24,36 @@ export default function UploadPage() {
     });
   }, []);
 
+  function uploadFile(formData) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/htmx/upload');
+      xhr.setRequestHeader('Authorization', `Bearer ${getToken()}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) setUploadPercent(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({ text: xhr.responseText, headers: { get: (k) => xhr.getResponseHeader(k) } });
+        } else {
+          reject(new Error(xhr.responseText?.slice(0, 200) || `อัพโหลดไม่สำเร็จ (${xhr.status})`));
+        }
+      };
+      xhr.onerror = () => reject(new Error('เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'));
+      xhr.send(formData);
+    });
+  }
+
   async function handleSubmit() {
     if (!file) return;
     setUploading(true);
+    setUploadPercent(0);
     try {
-      // Step 1: Upload
       const uploadForm = new FormData();
       uploadForm.append('file', file);
-      const uploadRes = await fetch('/htmx/upload', { method: 'POST', body: uploadForm, headers: { Authorization: `Bearer ${getToken()}` } });
-      if (!uploadRes.ok) {
-        const body = await uploadRes.text().catch(() => '');
-        notify(body.slice(0, 200) || `อัพโหลดไม่สำเร็จ (${uploadRes.status})`, 'error');
-        setUploading(false);
-        return;
-      }
-      const text = await uploadRes.text();
-      const match = text.match(/audio\/(\d+)/);
-      const redirect = uploadRes.headers.get('HX-Redirect');
+      const res = await uploadFile(uploadForm);
+      const match = res.text.match(/audio\/(\d+)/);
+      const redirect = res.headers.get('HX-Redirect');
       const audioId = match?.[1] || redirect?.match(/audio\/(\d+)/)?.[1];
       if (!audioId) {
         notify('อัพโหลดเสร็จแต่ไม่ได้รับ audio id กลับมา', 'error');
@@ -46,7 +61,6 @@ export default function UploadPage() {
         return;
       }
 
-      // Step 2: Start with config
       const startForm = new FormData();
       Object.entries(form).forEach(([k, v]) => startForm.append(k, v));
       const startRes = await fetch(`/api/audio/${audioId}/start`, { method: 'POST', body: startForm, headers: { Authorization: `Bearer ${getToken()}` } });
@@ -57,7 +71,6 @@ export default function UploadPage() {
         return;
       }
 
-      // Navigate to transcription
       if (startRes.redirected) {
         navigate(new URL(startRes.url).pathname);
         return;
@@ -75,6 +88,10 @@ export default function UploadPage() {
       notify(err.message || 'เกิดข้อผิดพลาด', 'error');
       setUploading(false);
     }
+  }
+
+  if (uploading) {
+    return <ProgressSteps showUpload uploadPercent={uploadPercent} progress={0} />;
   }
 
   return (
@@ -144,10 +161,10 @@ export default function UploadPage() {
         {/* Submit */}
         <button
           onClick={handleSubmit}
-          disabled={!file || uploading}
+          disabled={!file}
           className="w-full py-3 bg-[#2563eb] hover:bg-[#1d4ed8] disabled:bg-[#d1d5db] text-white rounded-lg text-sm font-medium transition-colors"
         >
-          {uploading ? 'กำลังอัพโหลดและเริ่มถอดเสียง...' : 'เริ่มถอดเสียง'}
+          เริ่มถอดเสียง
         </button>
       </div>
     </div>
