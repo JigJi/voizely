@@ -28,6 +28,7 @@ def _get_user_meeting_subjects(db: Session, user: User) -> set[str]:
     start_date = today - timedelta(days=30)
 
     # 1. Get cached subjects for past days (start_date to yesterday)
+    from app.services.meeting_platforms.teams_client import TeamsClient
     cached = (
         db.query(UserCalendarCache.subject)
         .filter(
@@ -37,7 +38,7 @@ def _get_user_meeting_subjects(db: Session, user: User) -> set[str]:
         )
         .all()
     )
-    subjects = {row.subject.strip().lower() for row in cached}
+    subjects = {TeamsClient._normalize_subject(row.subject).lower() for row in cached}
 
     # 2. Find which past days are NOT cached yet → fetch from Graph API
     cached_dates = set(

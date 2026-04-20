@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Upload, FileAudio } from 'lucide-react';
 import { getGroups } from '../api';
 import { getToken } from '../lib/auth';
+import { notify } from '../components/Notification';
 
 export default function UploadPage() {
   const [file, setFile] = useState(null);
@@ -29,29 +30,49 @@ export default function UploadPage() {
       const uploadForm = new FormData();
       uploadForm.append('file', file);
       const uploadRes = await fetch('/htmx/upload', { method: 'POST', body: uploadForm, headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!uploadRes.ok) {
+        const body = await uploadRes.text().catch(() => '');
+        notify(body.slice(0, 200) || `อัพโหลดไม่สำเร็จ (${uploadRes.status})`, 'error');
+        setUploading(false);
+        return;
+      }
       const text = await uploadRes.text();
       const match = text.match(/audio\/(\d+)/);
       const redirect = uploadRes.headers.get('HX-Redirect');
       const audioId = match?.[1] || redirect?.match(/audio\/(\d+)/)?.[1];
-
-      if (!audioId) { setUploading(false); return; }
+      if (!audioId) {
+        notify('อัพโหลดเสร็จแต่ไม่ได้รับ audio id กลับมา', 'error');
+        setUploading(false);
+        return;
+      }
 
       // Step 2: Start with config
       const startForm = new FormData();
       Object.entries(form).forEach(([k, v]) => startForm.append(k, v));
       const startRes = await fetch(`/api/audio/${audioId}/start`, { method: 'POST', body: startForm, headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!startRes.ok) {
+        const body = await startRes.text().catch(() => '');
+        notify(body.slice(0, 200) || `เริ่มถอดเสียงไม่สำเร็จ (${startRes.status})`, 'error');
+        setUploading(false);
+        return;
+      }
 
       // Navigate to transcription
       if (startRes.redirected) {
         navigate(new URL(startRes.url).pathname);
+        return;
+      }
+      const startText = await startRes.text();
+      const tMatch = startText.match(/transcriptions\/(\d+)/);
+      if (tMatch) {
+        navigate(`/transcriptions/${tMatch[1]}`);
       } else {
-        const startText = await startRes.text();
-        const tMatch = startText.match(/transcriptions\/(\d+)/);
-        if (tMatch) navigate(`/transcriptions/${tMatch[1]}`);
-        else navigate('/');
+        notify('เริ่มถอดเสียงสำเร็จแต่ไม่พบ transcription id', 'error');
+        setUploading(false);
       }
     } catch (err) {
       console.error(err);
+      notify(err.message || 'เกิดข้อผิดพลาด', 'error');
       setUploading(false);
     }
   }

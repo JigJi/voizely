@@ -336,7 +336,7 @@ class TeamsClient(MeetingPlatformClient):
         for item in data.get("value", []):
             if not item.get("isOnlineMeeting"):
                 continue
-            subject = (item.get("subject") or "").strip()
+            subject = self._normalize_subject(item.get("subject"))
             start_str = item.get("start", {}).get("dateTime", "")
             if subject:
                 events.append({
@@ -353,6 +353,22 @@ class TeamsClient(MeetingPlatformClient):
             logger.error("No recording_url in recording_info")
             return False
         return self._graph_download(url, dest_path)
+
+    # NBSP, BOM, zero-width space/non-joiner/joiner, word joiner, Thai Phinthu,
+    # plus standard whitespace — stripped from both ends of a subject.
+    _SUBJECT_STRIP = " \t\n\r\f\v\u00a0\ufeff\u200b\u200c\u200d\u2060\u0e3a"
+
+    @staticmethod
+    def _normalize_subject(subject: str | None) -> str:
+        """Normalize a meeting subject so calendar event and recording filename
+        forms compare equal. Strips invisible chars from both edges and
+        collapses internal whitespace (incl. NBSP)."""
+        if not subject:
+            return ""
+        import re
+        s = subject.strip(TeamsClient._SUBJECT_STRIP)
+        s = re.sub(r"\s+", " ", s)
+        return s
 
     @staticmethod
     def _parse_subject_from_filename(filename: str) -> str:
@@ -373,9 +389,7 @@ class TeamsClient(MeetingPlatformClient):
         parts = name.rsplit("-", 1)
         if len(parts) > 1 and len(parts[-1]) >= 8 and parts[-1][:8].isdigit():
             name = parts[0]
-        # Strip BOM/zero-width chars sometimes left from Thai filenames
-        name = name.strip().lstrip("\ufeff\u200b\u0e3a")
-        return name.strip() or filename
+        return TeamsClient._normalize_subject(name) or filename
 
     @staticmethod
     def _parse_datetime(dt_str: str | None) -> datetime | None:

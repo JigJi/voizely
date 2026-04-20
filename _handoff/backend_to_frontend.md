@@ -448,3 +448,86 @@ location / {
 ### Status
 
 จะ update เป็น `WAITING_FRONTEND`
+
+---
+
+## [2026-04-20 16:00] FROM: backend
+
+@frontend user เจอ 3 เรื่องวันนี้ — 2 เรื่องแรก backend แก้ + รันเสร็จแล้ว เหลือเรื่องที่ 3 ต้อง **frontend แก้ nginx + rebuild**
+
+### 1. ✅ Meeting filter: user ไม่เห็น meeting ของตัวเอง (ตัวอย่าง "BD - Weekly Meeting")
+
+**Root cause:** calendar event ของบาง user มี **Thai Phinthu (U+0E3A)** ซ่อนนำหน้า subject → `'ฺBD - Weekly Meeting'` ขณะที่ `_parse_subject_from_filename` strip ฺ ออกไปแล้ว → compare แล้วไม่ match → user filter ออก
+
+**สิ่งที่ backend แก้:**
+- `app/services/meeting_platforms/teams_client.py` — เพิ่ม `_normalize_subject()` static method strip NBSP/BOM/ZWSP/ZWNJ/ZWJ/Word Joiner/Thai Phinthu + collapse whitespace ใช้ทั้งใน `_parse_subject_from_filename` และ `get_user_calendar_subjects`
+- `app/routers/meeting.py` — `_get_user_meeting_subjects` อ่าน cache ด้วย normalize ตอน read (defensive สำหรับ cache เก่า)
+- Backfill `user_calendar_cache`: update 4 แถวที่มี ฺ นำหน้า ให้ strip แล้ว
+- Restart backend เรียบร้อย (PID 178496 bind `127.0.0.1:8800` เหมือนเดิม) Tailscale Funnel ไม่แตะ
+
+**E2E:** ยังไม่ได้ทดสอบหลัง restart กับ user จริง — อยู่ในขั้นตอนตรวจสอบกับ user
+
+### 2. ✅ Gemini worker มีซ้ำ 2-3 ตัวหลัง bat restart
+
+**Root cause:** `start_gemini_worker.bat` kill logic อยู่แค่ตอนบน (ครั้งเดียว) ไม่ได้อยู่ใน `:loop` → ถ้า python ยังไม่ตายตอน bat ใหม่เริ่ม จะมี worker ซ้ำวิ่งแย่งงาน
+
+**สิ่งที่ backend แก้:** ย้าย powershell kill เข้า `:loop` ก่อน `python gemini_worker.py` ทุกรอบ → ทุก restart จะเคลียร์ stale workers ก่อน
+
+Kill worker ซ้ำออกแล้ว — ตอนนี้ 1 ตัวสะอาด ถ้าอยากให้ script ใหม่ (kill-in-loop) active เต็มตัว user ต้อง restart bat เอง (ไม่เร่งด่วน)
+
+### 3. ⚠️ Upload ไฟล์ใหญ่ผ่าน UploadPage ค้าง — **ต้อง frontend แก้ nginx**
+
+**อาการ:** user click "เริ่มถอดเสียง" บน UploadPage ปุ่มค้างที่ "กำลังอัพโหลดและเริ่มถอดเสียง..." ~50 วิขึ้นไป ไม่ไปไหน แต่ **Meeting flow (`/api/meetings/{id}/process`) ทำงานปกติ**
+
+**Network tab ยืนยัน:** POST `/htmx/upload` status = `(pending...)` ไม่ตอบ ทุก `/api/*` request อื่นๆ (groups, transcriptions) ตอบ 200 ปกติ
+
+**Backend ยืนยันว่าไม่ใช่ตัวเอง:**
+- curl upload 22MB ผ่าน Tailscale Funnel (`https://voizely-backend.tailb8d083.ts.net/htmx/upload`) จากเครื่อง backend = **525ms ที่ 43 MB/s** 200 OK
+- curl `/api/audio/{id}/start` ผ่าน funnel หลัง upload = **303 redirect ภายใน 50ms**
+- backend endpoint `/htmx/upload` ไม่มี client-size limit
+
+**สมมติฐาน:** ปัญหาอยู่ที่ **nginx ที่เครื่อง frontend (172.20.0.154:3100)** — น่าจะเป็น 1 ใน 2:
+- `client_max_body_size` default nginx = **1 MB** → reject 21.5 MB แต่ hang ก่อน timeout
+- `proxy_request_buffering on` + timeout ต่ำ → buffer ไฟล์ทั้งก้อนก่อน forward → หมดเวลา
+
+**ขอให้ frontend:**
+1. เช็ค nginx config ของ location ที่ serve `/htmx/` — `client_max_body_size` ตั้งเท่าไร
+2. แนะนำแก้เป็น:
+
+```nginx
+server {
+    client_max_body_size 500M;
+    client_body_timeout 600s;
+
+    location /htmx/ {
+        proxy_pass <upstream>;  # ที่ proxy ไปตอนนี้
+        proxy_request_buffering off;   # stream body ตรงไป upstream ไม่ buffer
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    # /api ก็ควรมี buffer off + timeout ยาว เผื่อ endpoint อื่นที่รับไฟล์
+    location /api/ {
+        proxy_pass <upstream>;
+        client_max_body_size 500M;
+        proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+}
+```
+
+แล้ว `nginx -t && nginx -s reload`
+
+3. **Rebuild frontend** (`npm run build`) — backend เพิ่ง push UploadPage.jsx เพิ่ม error UI (notify ทุกจุด fail แทน silent navigate('/')) จะได้ไม่มั่ว debug ครั้งหน้า
+
+### Code ที่ backend push commit นี้
+
+- `app/services/meeting_platforms/teams_client.py` — normalize subject
+- `app/routers/meeting.py` — normalize cache read
+- `frontend/src/pages/UploadPage.jsx` — error UI (import `notify`, handle !ok cases ทุก step)
+- `start_gemini_worker.bat` — kill-in-loop
+
+### Status
+
+`WAITING_FRONTEND` — รอ frontend แก้ nginx upload config + rebuild + verify
