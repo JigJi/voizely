@@ -112,7 +112,7 @@ def _get_pyannote():
         from pyannote.audio import Pipeline
         logger.info("Loading Pyannote model...")
         _pyannote_pipeline = Pipeline.from_pretrained(
-            'pyannote/speaker-diarization-3.1', use_auth_token=True
+            'pyannote/speaker-diarization-3.1', use_auth_token=settings.HF_TOKEN
         )
         _pyannote_pipeline.to(torch.device('cuda'))
         logger.info("Pyannote model loaded")
@@ -1407,15 +1407,18 @@ def _check_deepgram_diarization_quality(utterances):
     """Decide whether Deepgram's built-in diarization is good enough.
 
     Returns (is_good, num_speakers, max_pct, reason).
-    Poor diarization = 1 speaker total, or one speaker dominates >85% of speech time.
+    Poor diarization signs: 1 speaker total, one speaker dominates >85%,
+    ghost speakers (total <10s or avg segment <1s), or >6 total speakers (mono over-split).
     """
     if not utterances:
         return False, 0, 1.0, "no utterances"
 
     durs = {}
+    counts = {}
     for u in utterances:
         sp = u.get("speaker", 0)
         durs[sp] = durs.get(sp, 0) + (u["end"] - u["start"])
+        counts[sp] = counts.get(sp, 0) + 1
 
     num_speakers = len(durs)
     total = sum(durs.values()) or 1
@@ -1425,6 +1428,14 @@ def _check_deepgram_diarization_quality(utterances):
         return False, num_speakers, max_pct, f"only {num_speakers} speaker"
     if max_pct > 0.85:
         return False, num_speakers, max_pct, f"one speaker dominates {max_pct*100:.0f}%"
+    # Ghost speaker detection: short total time or very short avg segment = likely over-split
+    ghosts = [sp for sp in durs
+              if durs[sp] < 10 or (durs[sp] / counts[sp]) < 1.0]
+    if ghosts:
+        return False, num_speakers, max_pct, f"ghost speakers detected: {ghosts}"
+    # Too many speakers for a normal meeting — likely mono over-split
+    if num_speakers > 6:
+        return False, num_speakers, max_pct, f"too many speakers ({num_speakers}), likely mono over-split"
     return True, num_speakers, max_pct, f"{num_speakers} speakers, max {max_pct*100:.0f}%"
 
 
@@ -1559,30 +1570,16 @@ def _process_spectral(db, t, file_path, transcription_id, start_time, mode="spec
     t.status_message = "กำลังบันทึก..."
     db.commit()
 
-    # Step 4.5: Auto-match speakers against stored voiceprints
+    # Step 4.5: Voiceprint suggestions only (user confirms manually in UI — no auto-rename)
     try:
-        from voiceprint_service import identify_speakers, get_speaker_suggestions
-        # Build dg_segments format for voiceprint matching
+        from voiceprint_service import get_speaker_suggestions
         dg_segs_for_vp = [{"start": s["start"], "end": s["end"], "speaker": i, "is_gap": False}
                           for i, s in enumerate(final_segs)]
         vp_suggestions = get_speaker_suggestions(file_path, dg_segs_for_vp)
         t.voiceprint_suggestions = json.dumps(vp_suggestions, ensure_ascii=False)
         logger.info("#%d Voiceprint suggestions: %s", transcription_id, vp_suggestions)
-
-        vp_mapping = identify_speakers(file_path, dg_segs_for_vp)
-        if vp_mapping:
-            # Rename speakers in segments
-            for seg_obj in db.query(TranscriptionSegment).filter(
-                TranscriptionSegment.transcription_id == transcription_id
-            ).all():
-                for old_spk, new_name in vp_mapping.items():
-                    old_label = f"Speaker {old_spk + 1}" if isinstance(old_spk, int) else old_spk
-                    if seg_obj.speaker == old_label:
-                        seg_obj.speaker = new_name
-            db.commit()
-            logger.info("#%d Voiceprint matched: %s", transcription_id, vp_mapping)
     except Exception as e:
-        logger.warning("#%d Voiceprint matching failed: %s", transcription_id, e)
+        logger.warning("#%d Voiceprint suggestions failed: %s", transcription_id, e)
 
     # Step 5: Generate analysis
     t.progress_percent = 90
@@ -1936,36 +1933,15 @@ def process_transcription(transcription_id):
 
         logger.info("#%d %s: %d segments, %d speakers, %.0fs", transcription_id, diarization_model, len(dg_segments), num_speakers, duration)
 
-        # Auto-match speakers against stored voiceprints
+        # Voiceprint suggestions only (user confirms manually in UI — no auto-rename)
         try:
-            from voiceprint_service import identify_speakers, get_speaker_suggestions
-            # Save suggestions for UI
+            from voiceprint_service import get_speaker_suggestions
             vp_suggestions = get_speaker_suggestions(file_path, dg_segments)
             t.voiceprint_suggestions = json.dumps(vp_suggestions, ensure_ascii=False)
             db.commit()
             logger.info("#%d Voiceprint suggestions: %s", transcription_id, vp_suggestions)
-            # Auto-rename high-confidence matches
-            vp_mapping = identify_speakers(file_path, dg_segments)
-            if vp_mapping:
-                # Update timeline guide with matched names
-                for seg in dg_segments:
-                    if seg.get("is_gap"):
-                        continue
-                    spk = seg["speaker"]
-                    if spk in vp_mapping:
-                        seg["matched_name"] = vp_mapping[spk]
-                logger.info("#%d Voiceprint matched: %s", transcription_id, vp_mapping)
-                # Rebuild guide with matched names
-                guide_lines = []
-                for seg in dg_segments:
-                    if seg.get("is_gap"):
-                        guide_lines.append(f"{_fmt(seg['start'])} - {_fmt(seg['end'])} : [Gap]")
-                    else:
-                        name = seg.get("matched_name", f"Speaker {seg['speaker'] + 1}")
-                        guide_lines.append(f"{_fmt(seg['start'])} - {_fmt(seg['end'])} : {name}")
-                guide = "[Speaker Timeline Guide]\n\n" + "\n\n".join(guide_lines)
         except Exception as e:
-            logger.warning("#%d Voiceprint matching failed: %s", transcription_id, e)
+            logger.warning("#%d Voiceprint suggestions failed: %s", transcription_id, e)
 
         # Step 2: Gemini transcribes (chunked if > 10 min) (35-80%)
         with ProgressTicker(db, t, 35, 80, "Gemini กำลังถอดเสียง...", interval=5):
