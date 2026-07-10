@@ -10,7 +10,7 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8800.*LISTENING" 2^>nul') d
 timeout /t 2 /nobreak >nul
 
 :loop
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8800
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8800
 echo.
 echo [!] Server stopped. Restarting in 3 seconds... (Ctrl+C to exit)
 timeout /t 3 /nobreak >nul

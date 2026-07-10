@@ -34,3 +34,9 @@ qa_*.json
 test_*.py
 debug_*.py
 fix_*.py
+compare_*.py
+compare_*.json
+
+# test/debug artifacts (audio, images)
+*.wav
+people*.png

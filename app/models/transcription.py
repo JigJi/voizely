@@ -19,6 +19,9 @@ class TranscriptionGroup(Base):
     __tablename__ = "transcription_groups"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True, server_default="1"
+    )
     user_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id"), nullable=True, index=True
     )
@@ -39,6 +42,9 @@ class Transcription(Base):
     __tablename__ = "transcriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True, server_default="1"
+    )
     audio_file_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("audio_files.id"), unique=True
     )
@@ -124,6 +130,9 @@ class SpeakerProfile(Base):
     __tablename__ = "speaker_profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True, server_default="1"
+    )
     nickname: Mapped[str] = mapped_column(String(100))
     source: Mapped[str] = mapped_column(String(20), default="manual")  # "ad" or "manual"
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -146,12 +155,20 @@ class SpeakerProfile(Base):
 
 class CorrectionDict(Base):
     __tablename__ = "correction_dict"
+    # corrections are per-user; tenant_id added so the same (user, wrong) can't
+    # collide across tenants.
+    __table_args__ = (
+        sa.UniqueConstraint("tenant_id", "user_id", "wrong", name="uq_correction_tenant_user_wrong"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True, server_default="1"
+    )
     user_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id"), nullable=True, index=True
     )
-    wrong: Mapped[str] = mapped_column(String(200), unique=True)
+    wrong: Mapped[str] = mapped_column(String(200))
     correct: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone(timedelta(hours=7)))

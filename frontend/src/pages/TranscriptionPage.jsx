@@ -206,22 +206,37 @@ export default function TranscriptionPage() {
           {/* Spacer */}
           <div className="flex-1" />
 
-          {/* Cost (bottom) */}
-          {data.total_cost_usd > 0 && (
-            <div className="pt-4 border-t border-[#e5e7eb]">
-              <div className="text-xs font-medium text-[#9ca3af] mb-1">ค่าใช้จ่าย</div>
-              <div className="space-y-1.5 text-xs">
-                <div className="flex justify-between"><span className="text-[#9ca3af]">{(() => {
-                  const m = data.model_size || '';
-                  const labels = {'deepgram': 'Deepgram', 'spectral': 'Deepgram + Spectral', 'pyannote': 'Pyannote', 'gemini': 'Gemini',
-                    'smart(spectral)': 'Smart (Spectral)', 'smart(deepgram)': 'Smart (Deepgram)', 'smart': 'Smart'};
-                  return labels[m.split('+')[0]] || m.split('+')[0];
-                })()}</span><span>{((data.deepgram_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
-                <div className="flex justify-between"><span className="text-[#9ca3af]">Gemini</span><span>{((data.gemini_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
-                <div className="flex justify-between font-medium border-t border-[#e5e7eb] pt-1 mt-1"><span>รวม</span><span>{((data.total_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
+          {/* Model + cost (bottom-right) */}
+          {data.model_size && (() => {
+            const head = (data.model_size || '').split('+')[0];
+            const isLocal = head.startsWith('local');
+            const hasVP = /vp-merged|voiceprint/i.test(data.model_size || '');
+            const asrName = {'local': 'Pathumma', 'local_pathumma': 'Pathumma', 'local_qwen': 'Qwen3-ASR', 'local_monsoon': 'Monsoon'}[head] || 'Pathumma';
+            const labels = {'deepgram': 'Deepgram', 'spectral': 'Deepgram + Spectral', 'pyannote': 'Pyannote', 'gemini': 'Gemini',
+              'smart(spectral)': 'Smart (Spectral)', 'smart(deepgram)': 'Smart (Deepgram)', 'smart': 'Smart'};
+            const modelLabel = isLocal ? `Local Sovereign (${asrName})` : (labels[head] || head);
+            return (
+              <div className="pt-4 border-t border-[#e5e7eb]">
+                <div className="text-xs font-medium text-[#9ca3af] mb-1">โมเดล</div>
+                <div className="space-y-1.5 text-xs">
+                  {isLocal ? (
+                    <>
+                      <div className="flex justify-between"><span className="text-[#9ca3af]">{modelLabel}</span><span className="text-[#16a34a] font-medium">ในเครื่อง</span></div>
+                      <div className="text-[10px] text-[#9ca3af] leading-tight">{asrName} ASR + ECAPA/spectral + Typhoon MoM{hasVP ? ' + Voiceprint' : ''}</div>
+                      <div className="flex justify-between font-medium border-t border-[#e5e7eb] pt-1 mt-1"><span>ค่าใช้จ่าย</span><span>0.00 บาท</span></div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex justify-between"><span className="text-[#9ca3af]">{modelLabel}</span><span>{((data.deepgram_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
+                      <div className="flex justify-between"><span className="text-[#9ca3af]">Gemini</span><span>{((data.gemini_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
+                      {hasVP && <div className="text-[10px] text-[#16a34a] leading-tight">+ Voiceprint ช่วยแยกเสียง (local, $0)</div>}
+                      <div className="flex justify-between font-medium border-t border-[#e5e7eb] pt-1 mt-1"><span>รวม</span><span>{((data.total_cost_usd || 0) * 34.5).toFixed(2)} บาท</span></div>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
 

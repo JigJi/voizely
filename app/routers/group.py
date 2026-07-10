@@ -14,9 +14,14 @@ templates = Jinja2Templates(directory="app/templates")
 
 @router.get("/api/groups")
 def list_groups(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    defaults = db.query(TranscriptionGroup).filter(TranscriptionGroup.is_default == True).order_by(TranscriptionGroup.id).all()
+    tid = current_user.tenant_id
+    # default group is per-tenant
+    defaults = db.query(TranscriptionGroup).filter(
+        TranscriptionGroup.is_default == True,
+        TranscriptionGroup.tenant_id == tid,
+    ).order_by(TranscriptionGroup.id).all()
     if not defaults:
-        default = TranscriptionGroup(name="ทั่วไป", is_default=True, sort_order=9999)
+        default = TranscriptionGroup(name="ทั่วไป", is_default=True, sort_order=9999, tenant_id=tid)
         db.add(default)
         db.commit()
         db.refresh(default)
@@ -29,6 +34,7 @@ def list_groups(db: Session = Depends(get_db), current_user: User = Depends(get_
         db.commit()
     groups = (
         db.query(TranscriptionGroup)
+        .filter(TranscriptionGroup.tenant_id == tid)
         .filter(
             (TranscriptionGroup.user_id == current_user.id) |
             (TranscriptionGroup.user_id.is_(None)) |
@@ -55,8 +61,23 @@ async def create_group(request: Request, db: Session = Depends(get_db), current_
     name = body.get("name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Missing name")
-    max_order = db.query(TranscriptionGroup).count()
-    group = TranscriptionGroup(name=name, sort_order=max_order, user_id=current_user.id, custom_instructions=body.get("custom_instructions"))
+    # Prevent duplicate group names per (tenant, user) — e.g. double-click submit.
+    # Return the existing group instead of creating a second one.
+    existing = db.query(TranscriptionGroup).filter(
+        TranscriptionGroup.tenant_id == current_user.tenant_id,
+        TranscriptionGroup.user_id == current_user.id,
+        TranscriptionGroup.name == name,
+    ).first()
+    if existing:
+        return {"ok": True, "id": existing.id, "existing": True}
+    max_order = db.query(TranscriptionGroup).filter(
+        TranscriptionGroup.tenant_id == current_user.tenant_id
+    ).count()
+    group = TranscriptionGroup(
+        name=name, sort_order=max_order,
+        tenant_id=current_user.tenant_id, user_id=current_user.id,
+        custom_instructions=body.get("custom_instructions"),
+    )
     db.add(group)
     db.commit()
     db.refresh(group)
@@ -64,9 +85,12 @@ async def create_group(request: Request, db: Session = Depends(get_db), current_
 
 
 @router.put("/api/groups/{group_id}")
-async def update_group(group_id: int, request: Request, db: Session = Depends(get_db)):
+async def update_group(group_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     body = await request.json()
-    group = db.query(TranscriptionGroup).filter(TranscriptionGroup.id == group_id).first()
+    group = db.query(TranscriptionGroup).filter(
+        TranscriptionGroup.id == group_id,
+        TranscriptionGroup.tenant_id == current_user.tenant_id,
+    ).first()
     if not group:
         raise HTTPException(status_code=404, detail="Not found")
     if "name" in body:
@@ -78,14 +102,20 @@ async def update_group(group_id: int, request: Request, db: Session = Depends(ge
 
 
 @router.delete("/api/groups/{group_id}")
-def delete_group(group_id: int, db: Session = Depends(get_db)):
-    group = db.query(TranscriptionGroup).filter(TranscriptionGroup.id == group_id).first()
+def delete_group(group_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    group = db.query(TranscriptionGroup).filter(
+        TranscriptionGroup.id == group_id,
+        TranscriptionGroup.tenant_id == current_user.tenant_id,
+    ).first()
     if not group:
         raise HTTPException(status_code=404, detail="Not found")
     if group.is_default:
         raise HTTPException(status_code=400, detail="Cannot delete default group")
-    # Move transcriptions to default group
-    default = db.query(TranscriptionGroup).filter(TranscriptionGroup.is_default == True).first()
+    # Move transcriptions to this tenant's default group
+    default = db.query(TranscriptionGroup).filter(
+        TranscriptionGroup.is_default == True,
+        TranscriptionGroup.tenant_id == current_user.tenant_id,
+    ).first()
     for t in group.transcriptions:
         t.group_id = default.id if default else None
     db.delete(group)
@@ -94,12 +124,23 @@ def delete_group(group_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/transcriptions/{transcription_id}/assign-group")
-async def assign_group(transcription_id: int, request: Request, db: Session = Depends(get_db)):
+async def assign_group(transcription_id: int, request: Request, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     body = await request.json()
     group_id = body.get("group_id")
-    t = db.query(Transcription).filter(Transcription.id == transcription_id).first()
+    t = db.query(Transcription).filter(
+        Transcription.id == transcription_id,
+        Transcription.tenant_id == current_user.tenant_id,
+    ).first()
     if not t:
         raise HTTPException(status_code=404, detail="Not found")
+    # target group (if any) must belong to the same tenant
+    if group_id is not None:
+        target = db.query(TranscriptionGroup).filter(
+            TranscriptionGroup.id == group_id,
+            TranscriptionGroup.tenant_id == current_user.tenant_id,
+        ).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Group not found")
     t.group_id = group_id
     db.commit()
     return {"ok": True}

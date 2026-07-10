@@ -39,10 +39,12 @@ export function isLoggedIn() {
   return !!getToken();
 }
 
-export async function login(username, password) {
+export async function login(username, password, org) {
   const form = new URLSearchParams();
   form.append('username', username);
   form.append('password', password);
+  // Tenant selector. Empty → backend defaults to the main company org (tenant 1).
+  if (org) form.append('org', org);
 
   const res = await fetch('/api/auth/login', {
     method: 'POST',

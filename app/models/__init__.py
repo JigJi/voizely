@@ -1,9 +1,11 @@
+from app.models.organization import Organization
 from app.models.audio import AudioFile, AudioStatus
 from app.models.user import User
 from app.models.transcription import Transcription, TranscriptionSegment, TranscriptionStatus
 from app.models.meeting import MeetingRecording, MeetingPlatform, MeetingRecordingStatus, UserCalendarCache
 
 __all__ = [
+    "Organization",
     "AudioFile",
     "AudioStatus",
     "User",

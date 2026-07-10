@@ -2156,6 +2156,8 @@ def main():
     pending = (
         db.query(Transcription)
         .filter(Transcription.status == TranscriptionStatus.pending)
+        # Local-pipeline jobs (model_size='local+...') are handled by local_worker.py
+        .filter(sa.func.coalesce(Transcription.model_size, "").notlike("local%"))
         .order_by(Transcription.created_at)
         .first()
     )

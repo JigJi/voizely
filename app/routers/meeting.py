@@ -119,9 +119,13 @@ def _get_user_meeting_subjects(db: Session, user: User) -> set[str]:
 @router.get("/api/meetings")
 def list_meetings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """List meeting recordings that match user's calendar events."""
+    # tenant boundary applies to ADMIN too — admins only see their own org
+    tenant_recordings = db.query(MeetingRecording).filter(
+        MeetingRecording.tenant_id == current_user.tenant_id
+    )
     if current_user.role == "ADMIN":
         items = (
-            db.query(MeetingRecording)
+            tenant_recordings
             .order_by(MeetingRecording.discovered_at.desc())
             .all()
         )
@@ -129,9 +133,9 @@ def list_meetings(db: Session = Depends(get_db), current_user: User = Depends(ge
         # Get subjects from user's calendar (cached)
         user_subjects = _get_user_meeting_subjects(db, current_user)
 
-        # Get all recordings and match by subject
+        # Get all recordings (within tenant) and match by subject
         all_recordings = (
-            db.query(MeetingRecording)
+            tenant_recordings
             .order_by(MeetingRecording.discovered_at.desc())
             .all()
         )
@@ -144,7 +148,10 @@ def list_meetings(db: Session = Depends(get_db), current_user: User = Depends(ge
 
 @router.get("/api/meetings/{meeting_id}")
 def get_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    m = db.query(MeetingRecording).filter(
+        MeetingRecording.id == meeting_id,
+        MeetingRecording.tenant_id == current_user.tenant_id,
+    ).first()
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     if current_user.role != "ADMIN":
@@ -157,7 +164,10 @@ def get_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: Us
 @router.get("/api/meetings/{meeting_id}/download")
 def download_meeting_audio(meeting_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Download the audio file of a meeting recording. Access-controlled by calendar match."""
-    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    m = db.query(MeetingRecording).filter(
+        MeetingRecording.id == meeting_id,
+        MeetingRecording.tenant_id == current_user.tenant_id,
+    ).first()
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     if current_user.role != "ADMIN":
@@ -185,7 +195,10 @@ async def retranscribe_meeting(meeting_id: int, request: Request, db: Session = 
     from app.models.transcription import TranscriptionSegment, TranscriptionGroup
     from app.config import settings
 
-    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    m = db.query(MeetingRecording).filter(
+        MeetingRecording.id == meeting_id,
+        MeetingRecording.tenant_id == current_user.tenant_id,
+    ).first()
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     if m.status == MeetingRecordingStatus.queued or m.status == MeetingRecordingStatus.downloading:
@@ -243,7 +256,10 @@ async def process_meeting(meeting_id: int, request: Request, db: Session = Depen
     """Manually trigger processing for a skipped/failed recording."""
     from app.models.transcription import TranscriptionGroup
 
-    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    m = db.query(MeetingRecording).filter(
+        MeetingRecording.id == meeting_id,
+        MeetingRecording.tenant_id == current_user.tenant_id,
+    ).first()
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     # Lock: reject if already queued or completed
@@ -295,6 +311,7 @@ async def process_meeting(meeting_id: int, request: Request, db: Session = Depen
         subject = m.meeting_subject or "Teams Recording"
         placeholder_filename = f"{uuid.uuid4().hex}.mp4"
         audio = AudioFile(
+            tenant_id=m.tenant_id,
             original_filename=f"{subject}.mp4",
             stored_filename=placeholder_filename,
             file_path=str(settings.upload_path / placeholder_filename),
@@ -309,6 +326,7 @@ async def process_meeting(meeting_id: int, request: Request, db: Session = Depen
 
         t = Transcription(
             audio_file_id=audio.id,
+            tenant_id=m.tenant_id,
             user_id=current_user.id,
             group_id=int(group_id) if group_id else None,
             model_size=recording_model,
@@ -363,7 +381,10 @@ def retry_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: 
     from app.config import settings
     from app.models.transcription import TranscriptionSegment
 
-    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    m = db.query(MeetingRecording).filter(
+        MeetingRecording.id == meeting_id,
+        MeetingRecording.tenant_id == current_user.tenant_id,
+    ).first()
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     if not m.transcription_id:
@@ -505,6 +526,7 @@ def _create_or_reset_transcription(db, m, user_id, group_id, recording_model):
     else:
         t = Transcription(
             audio_file_id=m.audio_file_id,
+            tenant_id=m.tenant_id,
             user_id=user_id,
             group_id=int(group_id) if group_id else None,
             model_size=recording_model,
@@ -528,7 +550,10 @@ def _create_or_reset_transcription(db, m, user_id, group_id, recording_model):
 @router.post("/api/meetings/{meeting_id}/skip")
 def skip_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Skip a recording - don't process it."""
-    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    m = db.query(MeetingRecording).filter(
+        MeetingRecording.id == meeting_id,
+        MeetingRecording.tenant_id == current_user.tenant_id,
+    ).first()
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     m.status = MeetingRecordingStatus.skipped
@@ -539,12 +564,66 @@ def skip_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: U
 @router.delete("/api/meetings/{meeting_id}")
 def delete_meeting(meeting_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Delete a meeting recording entry."""
-    m = db.query(MeetingRecording).filter(MeetingRecording.id == meeting_id).first()
+    m = db.query(MeetingRecording).filter(
+        MeetingRecording.id == meeting_id,
+        MeetingRecording.tenant_id == current_user.tenant_id,
+    ).first()
     if not m:
         raise HTTPException(status_code=404, detail="Not found")
     db.delete(m)
     db.commit()
     return {"ok": True}
+
+
+@router.put("/api/meetings/{meeting_id}/admin-edit")
+async def admin_edit_meeting(
+    meeting_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """ADMIN-only: edit meeting_subject and/or attendees.
+
+    Safety net for cases where auto-discovery's calendar match fails (e.g. ad-hoc
+    calls, recording uploaded by non-organizer, future filename format changes).
+    Lets an admin make a meeting visible to the right users without touching the DB.
+    """
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    m = db.query(MeetingRecording).filter(
+        MeetingRecording.id == meeting_id,
+        MeetingRecording.tenant_id == current_user.tenant_id,
+    ).first()
+    if not m:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    body = await request.json()
+
+    if "meeting_subject" in body:
+        new_subject = (body.get("meeting_subject") or "").strip()
+        if not new_subject:
+            raise HTTPException(status_code=400, detail="meeting_subject ห้ามว่าง")
+        m.meeting_subject = new_subject
+
+    if "attendees" in body:
+        att_input = body.get("attendees") or []
+        if not isinstance(att_input, list):
+            raise HTTPException(status_code=400, detail="attendees ต้องเป็น list")
+        cleaned = []
+        for e in att_input:
+            if isinstance(e, str) and "@" in e:
+                cleaned.append(e.strip().lower())
+        # Always keep organizer in the list (matches discovery-time invariant)
+        if m.meeting_organizer:
+            org = m.meeting_organizer.strip().lower()
+            if org and org not in cleaned:
+                cleaned.append(org)
+        m.attendees = json.dumps(cleaned)
+
+    db.commit()
+    db.refresh(m)
+    return _meeting_to_dict(m, db)
 
 
 def _meeting_to_dict(m: MeetingRecording, db: Session) -> dict:

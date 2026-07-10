@@ -121,6 +121,7 @@ def create_transcription(
 ) -> Transcription:
     transcription = Transcription(
         audio_file_id=audio.id,
+        tenant_id=audio.tenant_id,  # inherit tenant from the audio file
         user_id=user_id,
         model_size=model_size,
         language=language,
@@ -394,8 +395,12 @@ def get_transcription_by_audio(db: Session, audio_id: int) -> Transcription | No
     )
 
 
-def get_all_transcriptions(db: Session, user_id: int | None = None) -> list[Transcription]:
+def get_all_transcriptions(
+    db: Session, user_id: int | None = None, tenant_id: int | None = None
+) -> list[Transcription]:
     q = db.query(Transcription)
+    if tenant_id is not None:
+        q = q.filter(Transcription.tenant_id == tenant_id)
     if user_id is not None:
         q = q.filter(Transcription.user_id == user_id)
     return q.order_by(Transcription.created_at.desc()).all()

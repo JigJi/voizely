@@ -1,0 +1,40 @@
+- [user_profile.md](user_profile.md) — Product dev with RTX A4000, building AI speech products, Thai language
+- [project_product_direction.md](project_product_direction.md) — API-first (Deepgram+Gemini), local as fallback, pivoted ~2026-03-27
+- [project_current_focus.md](project_current_focus.md) — Speaker diarization is core feature, API pipeline is primary
+- [project_architecture.md](project_architecture.md) — FastAPI + React frontend, PostgreSQL, dual pipeline (API+local)
+- [project_product_vision.md](project_product_vision.md) — Meeting intelligence platform, hardware+software bundle as premium tier
+- [project_frontend_redesign.md](project_frontend_redesign.md) — React 18 + Vite 5 + Tailwind, core pages done, polish remaining
+- [project_landing_page.md](project_landing_page.md) — Landing page: Cappa.ai, tldv.io style, blue theme, route /home
+- [project_login_feature.md](project_login_feature.md) — Login feature requested, preparing for real user testing (2026-04-06)
+- [project_gemini_api_issues.md](project_gemini_api_issues.md) — Gemini API truncated/invalid JSON, mitigations applied
+- [project_speaker_profile.md](project_speaker_profile.md) — DB table exists, migration from JSON files still pending
+- [project_group_feature.md](project_group_feature.md) — Group feature completed, all phases done
+- [project_product_roadmap_input.md](project_product_roadmap_input.md) — 2 packages: mobile app (stereo dual mic) + hardware bundle (premium)
+- [project_diarization_critical.md](project_diarization_critical.md) — Good mics break diarization, multichannel is must-have
+- [project_bitrate_discovery.md](project_bitrate_discovery.md) — Low bitrate (32kbps) kills diarization, re-encode to 64kbps+ fixes it
+- [project_process_hang.md](project_process_hang.md) — Python process hangs on port 8800, unresolved since 2026-03-25
+- [feedback_accuracy.md](feedback_accuracy.md) — 80% satisfied, accepts imperfect transcript if summary is good
+- [feedback_process_management.md](feedback_process_management.md) — Kill old processes before restart, closing bat doesn't kill python
+- [feedback_no_start_processes.md](feedback_no_start_processes.md) — Never start server/worker directly, user manages via bat + Task Scheduler
+- [feedback_task_scheduler.md](feedback_task_scheduler.md) — Task Scheduler stop doesn't kill python, must kill PID directly
+- [feedback_bat_quoting.md](feedback_bat_quoting.md) — Bat can't pipe inside WSL commands, use temp file approach
+- [feedback_pythainlp_spell.md](feedback_pythainlp_spell.md) — PyThaiNLP spell.correct breaks text, only use word_tokenize
+- [feedback_never_kill_all_python.md](feedback_never_kill_all_python.md) — NEVER suggest taskkill /IM python.exe, user runs 10+ projects
+- [feedback_keep_it_simple.md](feedback_keep_it_simple.md) — Don't overcomplicate, ask if it's really needed first
+- [feedback_ask_before_api_cost.md](feedback_ask_before_api_cost.md) — ALWAYS ask before running API calls that cost money
+- [feedback_dont_reinvent.md](feedback_dont_reinvent.md) — Don't change working flow when scaling, just chunk + loop
+- [feedback_process_hang_failure.md](feedback_process_hang_failure.md) — Claude Code failed to solve process hang, don't claim fixed without testing
+- [feedback_copy_working_pattern.md](feedback_copy_working_pattern.md) — Copy patterns from working projects, don't invent new approaches
+- [feedback_never_restart.md](feedback_never_restart.md) — NEVER suggest restarting machine, hundreds of tasks running
+- [feedback_ui_quality.md](feedback_ui_quality.md) — Never use browser default alert/confirm/prompt, always custom styled
+- [project_roadmap_workspace.md](project_roadmap_workspace.md) — Future: AI Meeting Workspace, role-based Copilot, differentiate beyond MoM
+- [feedback_port_8801.md](feedback_port_8801.md) — Port 8801 is old/dead, never use. Frontend is port 3000
+- [feedback_frontend_port.md](feedback_frontend_port.md) — Frontend=port 3000 (React), Backend API=port 8800. NEVER serve frontend from 8800
+- [project_voiceprint_quality.md](project_voiceprint_quality.md) — Voiceprint needs quality gate, mono recordings contaminate profiles
+- [project_teams_worker_rewrite.md](project_teams_worker_rewrite.md) — teams_worker ต้อง rewrite จาก OneDrive scan → meeting-perspective query (Graph API permissions ครบแล้ว)
+- [project_diarization_pipeline.md](project_diarization_pipeline.md) — Proven: Deepgram timestamps + spectral clustering + Gemini audio-correct
+- [project_handoff_system.md](project_handoff_system.md) — _handoff/ git mailbox to coordinate with frontend-machine Claude, workflow + state machine
+- [project_thai_phinthu_gotcha.md](project_thai_phinthu_gotcha.md) — Invisible U+0E3A in Teams calendar subjects breaks string match, fix via _normalize_subject
+- [feedback_memo_work_always.md](feedback_memo_work_always.md) — Must save memory summary at end of sessions, user said not doing this loses context across sessions
+- [project_multitenancy.md](project_multitenancy.md) — Selling Voizely to other orgs (gov SaaS); Phase 0 tenant_id schema done, app layer pending
+- [project_local_sovereign_stack.md](project_local_sovereign_stack.md) — Replace Deepgram+Gemini w/ local Thai ASR+MoM for gov; Pathumma+Typhoon baseline ~70%, levers to 90% identified (2026-06-13)

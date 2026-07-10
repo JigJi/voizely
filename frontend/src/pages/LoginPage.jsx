@@ -4,8 +4,16 @@ import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { login, setToken, setUser } from '../lib/auth';
 
 export default function LoginPage() {
+  // Tenant: from ?org=<slug> in the URL (the link we give a customer org), or a
+  // remembered value. Empty = main company org. Later this can derive from the
+  // *.speez.ai subdomain automatically.
+  const initialOrg = new URLSearchParams(window.location.search).get('org')
+    || localStorage.getItem('org_slug') || '';
+
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [org, setOrg] = useState(initialOrg);
+  const [showOrg, setShowOrg] = useState(!!initialOrg);
   const [showPass, setShowPass] = useState(false);
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState('');
@@ -17,7 +25,11 @@ export default function LoginPage() {
     setError('');
     setLoading(true);
     try {
-      const data = await login(username, password);
+      const slug = org.trim();
+      const data = await login(username, password, slug);
+      // Remember the org so a re-login after logout keeps the right tenant.
+      if (slug) localStorage.setItem('org_slug', slug);
+      else localStorage.removeItem('org_slug');
       setToken(data.access_token, remember);
       setUser(data.user, remember);
       navigate('/', { replace: true });
@@ -83,6 +95,28 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
+
+            {/* Organization (tenant) — hidden for the main company login */}
+            {showOrg ? (
+              <div>
+                <label className="block text-sm font-medium text-[#374151] mb-1.5">รหัสองค์กร</label>
+                <input
+                  type="text"
+                  value={org}
+                  onChange={e => setOrg(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-[#d1d5db] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb] focus:border-transparent transition-all"
+                  placeholder="ปกติไม่ต้องกรอก — ระบบจำจากอีเมล"
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowOrg(true)}
+                className="text-xs text-[#9ca3af] hover:text-[#2563eb] transition-colors"
+              >
+                ระบุองค์กรเอง (กรณีระบบจำจากอีเมลไม่ได้)
+              </button>
+            )}
 
             {/* Remember */}
             <label className="flex items-center gap-2 cursor-pointer">

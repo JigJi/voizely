@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileAudio } from 'lucide-react';
 import { getGroups } from '../api';
-import { getToken } from '../lib/auth';
+import { getToken, getUser } from '../lib/auth';
 import { notify } from '../components/Notification';
 import ProgressSteps from '../components/ProgressSteps';
 
@@ -15,6 +15,7 @@ export default function UploadPage() {
   const [form, setForm] = useState({ group_id: '', diarization_model: 'smart', transcription_model: 'gemini' });
   const fileRef = useRef();
   const navigate = useNavigate();
+  const isAdmin = getUser()?.role === 'ADMIN';
 
   useEffect(() => {
     getGroups().then(g => {
@@ -146,6 +147,8 @@ export default function UploadPage() {
               <option value="deepgram">Deepgram Nova-3 (API)</option>
               <option value="pyannote">Pyannote (Local GPU)</option>
               <option value="gemini">Gemini 2.5 Flash (API)</option>
+              {isAdmin && <option value="local">🧪 Local Sovereign — Pathumma (ทดสอบ, ตัด 15 นาที)</option>}
+              {isAdmin && <option value="local_qwen">🧪 Local Sovereign — Qwen ASR (ทดสอบ, ตัด 15 นาที)</option>}
             </select>
           </div>
 

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, RefreshCw, RotateCcw, CheckCircle, XCircle, Clock, Download, Loader2, Users } from 'lucide-react';
-import { getMeetings, processMeeting, retranscribeMeeting, retryMeeting, getGroups, downloadMeetingAudio } from '../api';
+import { Play, RefreshCw, RotateCcw, CheckCircle, XCircle, Clock, Download, Loader2, Users, Pencil } from 'lucide-react';
+import { getMeetings, processMeeting, retranscribeMeeting, retryMeeting, getGroups, downloadMeetingAudio, adminEditMeeting } from '../api';
 import { notify } from '../components/Notification';
+import { getUser } from '../lib/auth';
 
 const STATUS_MAP = {
   discovered: { label: 'New', color: '#3b82f6', icon: Download },
@@ -30,7 +31,11 @@ export default function MeetingPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [editSubject, setEditSubject] = useState('');
+  const [editAttendees, setEditAttendees] = useState('');
   const navigate = useNavigate();
+  const isAdmin = getUser()?.role === 'ADMIN';
 
   useEffect(() => { load(); }, []);
 
@@ -93,6 +98,35 @@ export default function MeetingPage() {
     finally { setBusyId(null); }
   }
 
+  function openEditModal(m) {
+    setEditTarget(m);
+    setEditSubject(m.meeting_subject || '');
+    setEditAttendees((m.attendees || []).join(', '));
+  }
+
+  async function handleEditSave() {
+    if (!editTarget || submitting) return;
+    setSubmitting(true);
+    try {
+      const attList = editAttendees
+        .split(/[,\n;]+/)
+        .map(s => s.trim().toLowerCase())
+        .filter(s => s.includes('@'));
+      const updated = await adminEditMeeting(editTarget.id, {
+        meeting_subject: editSubject.trim(),
+        attendees: attList,
+      });
+      setMeetings(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m));
+      setEditTarget(null);
+      notify('บันทึกแล้ว');
+    } catch (e) {
+      const msg = e?.response?.data?.detail || e.message || 'บันทึกไม่สำเร็จ';
+      notify(msg, 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function handleDownload(m) {
     setBusyId(m.id);
     try {
@@ -138,6 +172,12 @@ export default function MeetingPage() {
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-base">{platformIcon(m.platform)}</span>
                       <h3 className="font-medium text-sm truncate">{m.meeting_subject || m.file_name || 'ไม่มีชื่อ'}</h3>
+                      {isAdmin && (
+                        <button onClick={() => openEditModal(m)} title="แก้ไข subject / attendees (admin)"
+                          className="p-1 text-[#9ca3af] hover:text-[#2563eb] transition-colors shrink-0">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium shrink-0" style={{ color: st.color, backgroundColor: st.color + '15' }}>
                         <Icon className="w-3 h-3" /> {st.label}
                       </span>
@@ -205,6 +245,43 @@ export default function MeetingPage() {
         </div>
       )}
 
+      {editTarget && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => !submitting && setEditTarget(null)}>
+          <div className="bg-white rounded-xl p-6 w-[520px] shadow-2xl" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold mb-1">แก้ไข Meeting (Admin)</h3>
+            <p className="text-xs text-[#6b7280] mb-4">
+              ใช้เมื่อระบบจับ subject/attendees ผิด เช่น recording ad-hoc call หรือชื่อไฟล์ไม่ตรงกับ calendar
+            </p>
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-[#374151] mb-1">Meeting subject</label>
+                <input type="text" value={editSubject} onChange={e => setEditSubject(e.target.value)}
+                  className="w-full px-3 py-2 border border-[#d1d5db] rounded-lg text-sm focus:outline-none focus:border-[#2563eb]"
+                  placeholder="ชื่อประชุมที่ตรงกับ calendar event" />
+                <p className="text-xs text-[#9ca3af] mt-1">ต้องตรง (case/space-insensitive) กับ subject ใน Outlook ของผู้เข้าร่วม</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[#374151] mb-1">Attendees (อีเมล)</label>
+                <textarea value={editAttendees} onChange={e => setEditAttendees(e.target.value)}
+                  rows={5}
+                  className="w-full px-3 py-2 border border-[#d1d5db] rounded-lg text-sm font-mono focus:outline-none focus:border-[#2563eb]"
+                  placeholder="alice@company.com, bob@company.com" />
+                <p className="text-xs text-[#9ca3af] mt-1">คั่นด้วย comma หรือบรรทัดใหม่ — organizer ({editTarget.meeting_organizer}) จะถูกใส่อัตโนมัติ</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setEditTarget(null)} disabled={submitting}
+                className="px-4 py-2 text-sm text-[#6b7280] hover:bg-[#f3f4f6] rounded-lg disabled:opacity-50">ยกเลิก</button>
+              <button onClick={handleEditSave} disabled={submitting || !editSubject.trim()}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm bg-[#2563eb] text-white rounded-lg hover:bg-[#1d4ed8] disabled:opacity-50">
+                {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {submitting ? 'กำลังบันทึก...' : 'บันทึก'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {processTarget && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setProcessTarget(null)}>
           <div className="bg-white rounded-xl p-6 w-[400px] shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -233,6 +310,8 @@ export default function MeetingPage() {
                   <option value="deepgram">Deepgram Nova-3 (API)</option>
                   <option value="pyannote">Pyannote (Local GPU)</option>
                   <option value="gemini">Gemini 2.5 Flash (API)</option>
+                  {isAdmin && <option value="local">🧪 Local Sovereign — Pathumma (ทดสอบ, ตัด 15 นาที)</option>}
+                  {isAdmin && <option value="local_qwen">🧪 Local Sovereign — Qwen ASR (ทดสอบ, ตัด 15 นาที)</option>}
                 </select>
               </div>
               <div>

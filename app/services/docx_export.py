@@ -4,7 +4,7 @@ import os
 import tempfile
 
 from docx import Document
-from docx.shared import Inches, Pt, Cm, RGBColor
+from docx.shared import Inches, Pt, Cm, RGBColor, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn, nsdecls
@@ -13,6 +13,21 @@ from docx.oxml import parse_xml
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "..", "static", "img", "logo_1.png")
 HEADER_COLOR = "1F4E79"  # Dark blue
 LABEL_BG = "D9D9D9"  # Light gray
+
+
+def _set_table_full_width(table, doc):
+    """Set table to use full page width."""
+    section = doc.sections[0]
+    page_width_emu = section.page_width - section.left_margin - section.right_margin
+    # Convert EMU to twips (1 twip = 635 EMU)
+    twips = int(page_width_emu / 635)
+    tbl = table._tbl
+    tblPr = tbl.tblPr if tbl.tblPr is not None else parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+    existing = tblPr.find(qn('w:tblW'))
+    if existing is not None:
+        tblPr.remove(existing)
+    tblW = parse_xml(f'<w:tblW {nsdecls("w")} w:w="{twips}" w:type="dxa"/>')
+    tblPr.append(tblW)
 
 
 def _set_cell_shading(cell, color):
@@ -101,10 +116,10 @@ def export_mom_docx(transcription, segments, db):
     ]
     table = doc.add_table(rows=len(info_data), cols=2)
     table.style = "Table Grid"
+    _set_table_full_width(table, doc)
     for i, (label, value) in enumerate(info_data):
         _style_table_cell(table.rows[i].cells[0], label, bold=True, bg=LABEL_BG)
         _style_table_cell(table.rows[i].cells[1], value)
-    # Set first column width
     for row in table.rows:
         row.cells[0].width = Cm(4)
 
@@ -155,6 +170,7 @@ def export_mom_docx(transcription, segments, db):
         # Table: org | names
         table = doc.add_table(rows=len(org_groups) + 1, cols=2)
         table.style = "Table Grid"
+        _set_table_full_width(table, doc)
         _style_table_cell(table.rows[0].cells[0], "หน่วยงาน", bold=True, bg=LABEL_BG)
         _style_table_cell(table.rows[0].cells[1], "รายชื่อ", bold=True, bg=LABEL_BG)
         table.rows[0].cells[0].width = Cm(4)
@@ -176,9 +192,18 @@ def export_mom_docx(transcription, segments, db):
     if topics_lines:
         _add_styled_para(doc, "ข้อสรุปที่ประชุม", bold=True, size=16, color=HEADER_COLOR, space_after=4)
 
-        for line in topics_lines:
+        # Pre-scan: detect which top-level bullets have sub-bullets (= headings)
+        heading_indices = set()
+        for idx, line in enumerate(topics_lines):
+            if line.startswith("- ") and not line.startswith("- **"):
+                # Check if next line is a sub-bullet
+                if idx + 1 < len(topics_lines) and topics_lines[idx + 1].startswith("  -"):
+                    heading_indices.add(idx)
+
+        for idx, line in enumerate(topics_lines):
             stripped = line.strip()
             if stripped.startswith("- **"):
+                # Bold heading: - **หัวข้อ**
                 topic_name = stripped.replace("- **", "").replace("**", "").strip()
                 p = doc.add_paragraph()
                 p.paragraph_format.space_before = Pt(6)
@@ -187,7 +212,27 @@ def export_mom_docx(transcription, segments, db):
                 run.font.name = "TH SarabunPSK"
                 run.font.size = Pt(14)
                 run.bold = True
-            elif stripped.startswith("- ") or stripped.startswith("  -"):
+            elif idx in heading_indices:
+                # Plain heading: - หัวข้อ (has sub-bullets)
+                topic_name = stripped.lstrip("- ").strip()
+                p = doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(6)
+                p.paragraph_format.space_after = Pt(2)
+                run = p.add_run(topic_name)
+                run.font.name = "TH SarabunPSK"
+                run.font.size = Pt(14)
+                run.bold = True
+            elif line.startswith("  -") or line.startswith("  - "):
+                # Sub-bullet
+                bullet_text = stripped.lstrip("- ").strip()
+                p = doc.add_paragraph(style="List Bullet")
+                p.paragraph_format.space_after = Pt(1)
+                p.paragraph_format.left_indent = Cm(1.2)
+                run = p.add_run(bullet_text)
+                run.font.name = "TH SarabunPSK"
+                run.font.size = Pt(14)
+            elif stripped.startswith("- "):
+                # Standalone bullet (no sub-bullets)
                 bullet_text = stripped.lstrip("- ").strip()
                 p = doc.add_paragraph(style="List Bullet")
                 p.paragraph_format.space_after = Pt(1)
@@ -228,6 +273,7 @@ def export_mom_docx(transcription, segments, db):
 
         table = doc.add_table(rows=len(parsed_actions) + 1, cols=4)
         table.style = "Table Grid"
+        _set_table_full_width(table, doc)
         table.autofit = True
         headers = ["ลำดับ", "รายละเอียด", "กำหนดการ", "ผู้รับผิดชอบ"]
         widths = [Cm(1.2), Cm(9), Cm(2.8), Cm(2.8)]

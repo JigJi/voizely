@@ -90,6 +90,7 @@ export const downloadMeetingAudio = async (id, subject) => {
 };
 export const retryMeeting = (id) => request(`/api/meetings/${id}/retry`, { method: 'POST' });
 export const skipMeeting = (id) => request(`/api/meetings/${id}/skip`, { method: 'POST' });
+export const adminEditMeeting = (id, data) => request(`/api/meetings/${id}/admin-edit`, { method: 'PUT', body: JSON.stringify(data) });
 
 // Corrections
 export const getCorrections = () => request('/api/corrections');

@@ -4,32 +4,102 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.passwords import verify_password
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
 
-def authenticate(username: str, password: str, db: Session) -> User | None:
-    """Authenticate user. Try AD first if enabled, fallback to fixed."""
-    profile = None
-    if settings.AD_ENABLED:
-        profile = _authenticate_ad(username, password)
-        if not profile:
-            logger.info("AD auth failed for %s, falling back to fixed auth", username)
-    if not profile:
-        profile = _authenticate_fixed(username, password)
+def authenticate(username: str, password: str, db: Session, org_slug: str = "default") -> User | None:
+    """Authenticate a user within a tenant (resolved by org slug).
 
-    if not profile:
+    Order: per-tenant AD (or global AD for the default org) → local password_hash
+    → legacy global fixed-password (default org / dev only).
+    """
+    org = _resolve_org(db, username, org_slug)
+    if not org:
+        logger.info("login rejected: cannot resolve org (slug='%s', user='%s')", org_slug, username)
         return None
 
-    return upsert_user_from_profile(db, profile)
+    # 1. AD path — per-tenant config, or global env settings for the default org
+    ad_cfg = _resolve_ad_config(org)
+    if ad_cfg:
+        profile = _authenticate_ad(username, password, ad_cfg)
+        if profile:
+            return upsert_user_from_profile(db, profile, org.id)
+        logger.info("AD auth failed for %s in org '%s'", username, org_slug)
+
+    # 2. Local password path — per-user bcrypt hash within this tenant
+    user = db.query(User).filter(
+        User.tenant_id == org.id,
+        User.username == username,
+    ).first()
+    if user and user.is_active and verify_password(password, user.password_hash):
+        user.last_login_at = datetime.now(timezone(timedelta(hours=7)))
+        db.commit()
+        return user
+
+    # 3. Legacy global fixed-password fallback (default org / dev only)
+    if org.id == 1 and settings.FIXED_PASSWORD and password == settings.FIXED_PASSWORD:
+        profile = _authenticate_fixed(username, password)
+        if profile:
+            return upsert_user_from_profile(db, profile, org.id)
+
+    return None
 
 
-def upsert_user_from_profile(db: Session, profile: dict) -> User:
+def _resolve_org(db: Session, username: str, org_slug: str = "default"):
+    """Pick the tenant for a login attempt.
+
+    Priority: explicit non-default slug (override / pre-domain fallback) → email
+    domain of the username (officer@doh.go.th → the org owning 'doh.go.th') →
+    the default (main company) tenant.
+    """
+    from app.models.organization import Organization
+
+    if org_slug and org_slug != "default":
+        return db.query(Organization).filter(
+            Organization.slug == org_slug, Organization.is_active == True
+        ).first()
+
+    if "@" in username:
+        domain = username.rsplit("@", 1)[1].strip().lower()
+        if domain:
+            for o in db.query(Organization).filter(Organization.is_active == True).all():
+                if domain in [d.strip().lower() for d in (o.email_domains or [])]:
+                    return o
+
+    return db.query(Organization).filter(
+        Organization.slug == "default", Organization.is_active == True
+    ).first()
+
+
+def _resolve_ad_config(org) -> dict | None:
+    """AD connection settings for a tenant, or None if it doesn't use AD.
+
+    Per-tenant ad_config wins; the default org (tenant 1) falls back to global
+    AD_* env settings for backward compatibility.
+    """
+    if org.ad_config and org.ad_config.get("server"):
+        return org.ad_config
+    if org.id == 1 and settings.AD_ENABLED and settings.AD_SERVER:
+        return {
+            "server": settings.AD_SERVER,
+            "domain": settings.AD_DOMAIN,
+            "base_dn": settings.AD_BASE_DN,
+        }
+    return None
+
+
+def upsert_user_from_profile(db: Session, profile: dict, tenant_id: int = 1) -> User:
     """Upsert user record from AD/external profile + sync SpeakerProfile if AD source."""
-    user = db.query(User).filter(User.username == profile["username"]).first()
+    user = db.query(User).filter(
+        User.tenant_id == tenant_id,
+        User.username == profile["username"],
+    ).first()
     if not user:
         user = User(
+            tenant_id=tenant_id,
             username=profile["username"],
             email=profile.get("email"),
             first_name=profile.get("first_name"),
@@ -55,7 +125,7 @@ def upsert_user_from_profile(db: Session, profile: dict) -> User:
     # Auto-sync SpeakerProfile if profile has real email (not @local placeholder)
     email = profile.get("email", "")
     if email and "@local" not in email:
-        _sync_speaker_profile(db, profile)
+        _sync_speaker_profile(db, profile, tenant_id)
 
     return user
 
@@ -78,7 +148,7 @@ def _shorten_department(dept: str) -> str:
     return dept[:3].upper()
 
 
-def _sync_speaker_profile(db: Session, profile: dict):
+def _sync_speaker_profile(db: Session, profile: dict, tenant_id: int = 1):
     """Auto-create/update SpeakerProfile from AD user data."""
     try:
         from app.models.transcription import SpeakerProfile
@@ -87,7 +157,8 @@ def _sync_speaker_profile(db: Session, profile: dict):
             return
 
         existing = db.query(SpeakerProfile).filter(
-            SpeakerProfile.email == profile.get("email")
+            SpeakerProfile.tenant_id == tenant_id,
+            SpeakerProfile.email == profile.get("email"),
         ).first()
 
         if existing:
@@ -98,20 +169,21 @@ def _sync_speaker_profile(db: Session, profile: dict):
                 existing.organization = profile.get("organization", "")
                 existing.updated_at = datetime.now(timezone(timedelta(hours=7)))
         else:
-            # Handle nickname collision: first_name → first_name + dept_short → username
-            nick_exists = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == nickname).first()
-            if nick_exists:
+            # Handle nickname collision within the tenant: first_name → +dept_short → username
+            def _nick_taken(n):
+                return db.query(SpeakerProfile).filter(
+                    SpeakerProfile.tenant_id == tenant_id,
+                    SpeakerProfile.nickname == n,
+                ).first() is not None
+            if _nick_taken(nickname):
                 dept_short = _shorten_department(profile.get("department", ""))
-                if dept_short:
-                    candidate = f"{nickname} {dept_short}"
-                    if not db.query(SpeakerProfile).filter(SpeakerProfile.nickname == candidate).first():
-                        nickname = candidate
-                    else:
-                        nickname = profile.get("username", nickname)
+                if dept_short and not _nick_taken(f"{nickname} {dept_short}"):
+                    nickname = f"{nickname} {dept_short}"
                 else:
                     nickname = profile.get("username", nickname)
 
             p = SpeakerProfile(
+                tenant_id=tenant_id,
                 nickname=nickname,
                 source="ad",
                 email=profile.get("email", ""),
@@ -139,16 +211,19 @@ def _authenticate_fixed(username: str, password: str) -> dict | None:
     }
 
 
-def _authenticate_ad(username: str, password: str) -> dict | None:
+def _authenticate_ad(username: str, password: str, cfg: dict) -> dict | None:
+    """Bind against a tenant's AD using its connection config (server/domain/base_dn)."""
     try:
         import ldap3
 
-        server = ldap3.Server(settings.AD_SERVER, get_info=ldap3.ALL)
-        user_dn = f"{username}@{settings.AD_DOMAIN}"
+        domain = cfg.get("domain", "")
+        base_dn = cfg.get("base_dn", "")
+        server = ldap3.Server(cfg["server"], get_info=ldap3.ALL)
+        user_dn = f"{username}@{domain}"
         conn = ldap3.Connection(server, user=user_dn, password=password, auto_bind=True)
 
         conn.search(
-            settings.AD_BASE_DN,
+            base_dn,
             f"(sAMAccountName={username})",
             attributes=["sAMAccountName", "displayName", "department", "mail"],
         )
@@ -165,7 +240,7 @@ def _authenticate_ad(username: str, password: str) -> dict | None:
 
         profile = {
             "username": str(entry.sAMAccountName),
-            "email": str(entry.mail) if entry.mail else f"{username}@{settings.AD_DOMAIN}",
+            "email": str(entry.mail) if entry.mail else f"{username}@{domain}",
             "first_name": first_name,
             "last_name": last_name,
             "department": str(entry.department) if entry.department else "",

@@ -19,7 +19,13 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 def _check_owner(t, current_user: User, db: Session | None = None):
-    """Raise 403 if user doesn't own this transcription and isn't a meeting attendee."""
+    """Raise if user can't access this transcription.
+
+    Tenant boundary is checked first and returns 404 (never reveal that a row in
+    another tenant exists) — this also scopes ADMIN to its own organization.
+    """
+    if getattr(t, "tenant_id", None) != current_user.tenant_id:
+        raise HTTPException(status_code=404, detail="Not found")
     if current_user.role == "ADMIN":
         return
     if t.user_id is None or t.user_id == current_user.id:
@@ -37,7 +43,9 @@ def _check_owner(t, current_user: User, db: Session | None = None):
 @router.get("/api/transcriptions")
 def list_transcriptions(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import TranscriptionSegment
-    items = transcription_service.get_all_transcriptions(db, user_id=current_user.id)
+    items = transcription_service.get_all_transcriptions(
+        db, user_id=current_user.id, tenant_id=current_user.tenant_id
+    )
     return [{
         "id": t.id,
         "audio_file_id": t.audio_file_id,
@@ -106,7 +114,7 @@ def start_transcription(
     current_user: User = Depends(get_current_user),
 ):
     audio = audio_service.get_audio(db, audio_id)
-    if not audio:
+    if not audio or audio.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=404, detail="Audio file not found")
 
     existing = transcription_service.get_transcription_by_audio(db, audio.id)
@@ -203,7 +211,7 @@ async def start_with_config(
     group_id = form.get("group_id")
 
     audio = audio_service.get_audio(db, audio_id)
-    if not audio:
+    if not audio or audio.tenant_id != current_user.tenant_id:
         raise HTTPException(status_code=404, detail="Audio not found")
 
     existing = transcription_service.get_transcription_by_audio(db, audio.id)
@@ -223,7 +231,10 @@ async def start_with_config(
         t.group_id = int(group_id)
     else:
         from app.models.transcription import TranscriptionGroup
-        default_group = db.query(TranscriptionGroup).filter(TranscriptionGroup.is_default == True).first()
+        default_group = db.query(TranscriptionGroup).filter(
+            TranscriptionGroup.is_default == True,
+            TranscriptionGroup.tenant_id == current_user.tenant_id,
+        ).first()
         if default_group:
             t.group_id = default_group.id
     db.commit()
@@ -584,10 +595,11 @@ def export_docx(transcription_id: int, token: str = None, db: Session = Depends(
     # Auth via query param (browser download can't send Bearer header)
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    username = decode_token(token)
-    if not username:
+    from app.core.tenancy import resolve_user
+    payload = decode_token(token)
+    if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
-    current_user = db.query(User).filter(User.username == username).first()
+    current_user = resolve_user(db, payload)
     if not current_user:
         raise HTTPException(status_code=401, detail="User not found")
 
@@ -653,7 +665,8 @@ def apply_corrections(transcription_id: int, db: Session = Depends(get_db), curr
 def list_speakers(source: str | None = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
     from sqlalchemy import or_
-    q = db.query(SpeakerProfile)
+    # tenant boundary first — AD voiceprints must never cross organizations
+    q = db.query(SpeakerProfile).filter(SpeakerProfile.tenant_id == current_user.tenant_id)
     if source:
         q = q.filter(SpeakerProfile.source == source)
     # Manual speakers: show only current user's
@@ -696,6 +709,7 @@ async def create_speaker(request: Request, db: Session = Depends(get_db), curren
         raise HTTPException(status_code=400, detail=f"ชื่อ '{nickname}' มีอยู่แล้ว กรุณาใช้ชื่ออื่น")
     p = SpeakerProfile(
         nickname=nickname,
+        tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         email=body.get("email", ""),
         full_name=body.get("full_name", ""),
@@ -714,7 +728,10 @@ async def update_speaker(speaker_id: int, request: Request, db: Session = Depend
     from app.models.transcription import SpeakerProfile
     from datetime import datetime, timezone, timedelta
     body = await request.json()
-    p = db.query(SpeakerProfile).filter(SpeakerProfile.id == speaker_id).first()
+    p = db.query(SpeakerProfile).filter(
+        SpeakerProfile.id == speaker_id,
+        SpeakerProfile.tenant_id == current_user.tenant_id,
+    ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
     if getattr(p, 'source', 'manual') == 'ad':
@@ -738,7 +755,10 @@ async def update_speaker(speaker_id: int, request: Request, db: Session = Depend
 @router.delete("/api/speakers/{speaker_id}")
 def delete_speaker(speaker_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
-    p = db.query(SpeakerProfile).filter(SpeakerProfile.id == speaker_id).first()
+    p = db.query(SpeakerProfile).filter(
+        SpeakerProfile.id == speaker_id,
+        SpeakerProfile.tenant_id == current_user.tenant_id,
+    ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
     if getattr(p, 'source', 'manual') == 'ad':
@@ -754,7 +774,12 @@ def delete_speaker(speaker_id: int, db: Session = Depends(get_db), current_user:
 @router.get("/api/voiceprints")
 def list_voiceprints_api(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
-    profiles = db.query(SpeakerProfile).order_by(SpeakerProfile.nickname).all()
+    profiles = (
+        db.query(SpeakerProfile)
+        .filter(SpeakerProfile.tenant_id == current_user.tenant_id)
+        .order_by(SpeakerProfile.nickname)
+        .all()
+    )
     return [{
         "name": p.nickname,
         "full_name": p.full_name or "",
@@ -771,10 +796,13 @@ async def update_voiceprint_api(speaker_name: str, request: Request, db: Session
     from app.models.transcription import SpeakerProfile
     from datetime import datetime, timezone, timedelta
     body = await request.json()
-    p = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == speaker_name).first()
+    p = db.query(SpeakerProfile).filter(
+        SpeakerProfile.nickname == speaker_name,
+        SpeakerProfile.tenant_id == current_user.tenant_id,
+    ).first()
     if not p:
         # Create new if not exists
-        p = SpeakerProfile(nickname=speaker_name)
+        p = SpeakerProfile(nickname=speaker_name, tenant_id=current_user.tenant_id)
         db.add(p)
     for key in ["full_name", "organization", "department", "position"]:
         if key in body:
@@ -787,7 +815,10 @@ async def update_voiceprint_api(speaker_name: str, request: Request, db: Session
 @router.delete("/api/voiceprints/{speaker_name}")
 def delete_voiceprint_api(speaker_name: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from app.models.transcription import SpeakerProfile
-    p = db.query(SpeakerProfile).filter(SpeakerProfile.nickname == speaker_name).first()
+    p = db.query(SpeakerProfile).filter(
+        SpeakerProfile.nickname == speaker_name,
+        SpeakerProfile.tenant_id == current_user.tenant_id,
+    ).first()
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
     db.delete(p)
@@ -812,11 +843,18 @@ async def add_correction(request: Request, db: Session = Depends(get_db), curren
     correct = body.get("correct", "").strip()
     if not wrong or not correct:
         raise HTTPException(status_code=400, detail="Missing wrong or correct")
-    existing = db.query(CorrectionDict).filter(CorrectionDict.wrong == wrong, CorrectionDict.user_id == current_user.id).first()
+    # corrections are per-user (matches unique(tenant_id, user_id, wrong))
+    existing = db.query(CorrectionDict).filter(
+        CorrectionDict.wrong == wrong,
+        CorrectionDict.user_id == current_user.id,
+    ).first()
     if existing:
         existing.correct = correct
     else:
-        db.add(CorrectionDict(wrong=wrong, correct=correct, user_id=current_user.id))
+        db.add(CorrectionDict(
+            wrong=wrong, correct=correct,
+            tenant_id=current_user.tenant_id, user_id=current_user.id,
+        ))
     db.commit()
     return {"ok": True}
 

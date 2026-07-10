@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.audio import AudioFileResponse
 from app.services import audio_service
+from app.models.user import User
+from app.routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/audio", tags=["audio"])
 
@@ -15,9 +17,10 @@ router = APIRouter(prefix="/api/audio", tags=["audio"])
 async def upload_audio(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     try:
-        audio = await audio_service.save_upload(file, db)
+        audio = await audio_service.save_upload(file, db, tenant_id=current_user.tenant_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return audio

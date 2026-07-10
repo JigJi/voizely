@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.core.security import create_access_token, decode_token
+from app.core.tenancy import resolve_user
 from app.models.user import User
 from app.services.auth_service import authenticate, upsert_user_from_profile
 
@@ -33,25 +34,30 @@ def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    username = decode_token(token)
-    if not username:
+    payload = decode_token(token)
+    if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
-    user = db.query(User).filter(User.username == username).first()
+    user = resolve_user(db, payload)
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
     return user
 
 
 @router.post("/login")
-def login(
+async def login(
+    request: Request,
     form: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
-    user = authenticate(form.username, form.password, db)
+    # Tenant is selected by org slug (sent by the frontend; later derived from the
+    # *.speez.ai subdomain). Defaults to "default" = the original company tenant.
+    raw = await request.form()
+    org_slug = (raw.get("org") or "default").strip() or "default"
+    user = authenticate(form.username, form.password, db, org_slug)
     if not user:
         raise HTTPException(status_code=401, detail="ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
 
-    token = create_access_token(user.username)
+    token = create_access_token(user.username, user.tenant_id)
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -142,7 +148,7 @@ def ad_verify(
         raise HTTPException(status_code=500, detail="Failed to upsert user")
 
     # 4. Issue JWT
-    token = create_access_token(user.username)
+    token = create_access_token(user.username, user.tenant_id)
     _audit("ad_verify.success", ip=client_ip, username=user.username, ad_source=body.ad_source)
 
     return {

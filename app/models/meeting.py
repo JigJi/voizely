@@ -29,6 +29,9 @@ class MeetingRecording(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True, server_default="1"
+    )
     platform = Column(String(20), nullable=False, index=True)
     platform_recording_id = Column(String(500), nullable=False)
     platform_meeting_id = Column(String(500), nullable=True)
@@ -61,6 +64,9 @@ class UserCalendarCache(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True, server_default="1"
+    )
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     subject = Column(String(500), nullable=False)
     event_start = Column(DateTime, nullable=True)

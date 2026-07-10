@@ -10,7 +10,11 @@ from fastapi.staticfiles import StaticFiles
 from app.database import SessionLocal
 from app.models.audio import AudioFile, AudioStatus
 from app.models.transcription import Transcription, TranscriptionStatus
-from app.routers import admin, audio, auth, group, meeting, pages, transcription
+from app.routers import admin, audio, auth, group, meeting, transcription
+# NOTE: `pages` (legacy server-rendered Jinja UI) is intentionally NOT imported/mounted.
+# It had no auth and no tenant scoping — serving it would leak every tenant's data to
+# anyone hitting / or /transcriptions/{id} directly on the backend. The React SPA
+# (served via the catch-all below) is the only UI; browsers use port 3000.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,7 +84,6 @@ def health():
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 app.include_router(auth.router)
-app.include_router(pages.router)
 app.include_router(audio.router)
 app.include_router(transcription.router)
 app.include_router(group.router)

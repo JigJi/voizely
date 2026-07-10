@@ -235,13 +235,25 @@ class TeamsClient(MeetingPlatformClient):
             # Build download URL
             download_url = f"{GRAPH_BASE}/drives/{drive_id}/items/{item_id}/content"
 
-            # Try to fetch meeting attendees from calendar
-            meeting_start = self._parse_datetime(item.get("lastModifiedDateTime"))
-            attendees = self._fetch_meeting_attendees(email, subject, meeting_start)
+            # Prefer datetime parsed from filename (= actual meeting start) over
+            # lastModifiedDateTime (= when Teams finished writing the file, often
+            # 1-3 hours later). Falls back to lastModified if filename parse fails.
+            meeting_start = (
+                self._parse_datetime_from_filename(name)
+                or self._parse_datetime(item.get("lastModifiedDateTime"))
+            )
 
-            # If calendar lookup failed, at least include the OneDrive owner as attendee
-            if not attendees:
+            # Try to fetch matching calendar event (real subject + attendees).
+            # OneDrive filenames strip ":/\\?*\"<>|" — so we time-window + fuzzy-match
+            # rather than exact subject filter, then prefer the calendar's original
+            # subject (which may contain those chars).
+            cal_event = self._fetch_calendar_event(email, subject, meeting_start)
+            if cal_event:
+                subject = cal_event["subject"]
+                attendees = cal_event["attendees"]
+            else:
                 attendees = [email.lower()]
+
             recordings.append({
                 "platform_recording_id": item_id,
                 "meeting_subject": subject,
@@ -260,55 +272,137 @@ class TeamsClient(MeetingPlatformClient):
         logger.info("Found %d new recording(s) for %s", len(recordings), email)
         return recordings
 
-    def _fetch_meeting_attendees(self, organizer_email: str, subject: str, meeting_start: datetime | None) -> list[str]:
-        """Fetch attendees from calendar event matching subject + date.
+    # Chars Windows/OneDrive strip from filenames — calendar subjects keep them.
+    _FS_ILLEGAL_CHARS = ':/\\?*"<>|'
 
-        Search the organizer's calendar for events with matching subject around
-        the recording date, then extract attendee email addresses.
-        Returns list of attendee emails (excluding the organizer).
+    @classmethod
+    def _normalize_for_match(cls, s: str) -> str:
+        """Subject form used for fuzzy filename↔calendar comparison.
+
+        Strips: invisible/Thai chars (via _normalize_subject), then filesystem-illegal
+        chars (which OneDrive removes from filenames), then lowercases. Two subjects
+        compare equal iff they differ only in those incidental characters.
         """
-        if not subject or not meeting_start:
-            return []
+        if not s:
+            return ""
+        s = cls._normalize_subject(s)  # collapses whitespace, strips Thai phinthu/NBSP/etc.
+        for c in cls._FS_ILLEGAL_CHARS:
+            s = s.replace(c, "")
+        # Re-collapse: stripping ":" leaves "Foo  Bar" → "Foo Bar"
+        import re
+        return re.sub(r"\s+", " ", s).strip().lower()
+
+    @staticmethod
+    def _parse_datetime_from_filename(filename: str) -> datetime | None:
+        """Extract meeting start time from Teams recording filename.
+
+        Teams filename format: "<subject>-YYYYMMDD_HHMMSS-<suffix>.mp4"
+        e.g. "Foo-20260506_095621-Meeting Recording.mp4" → 2026-05-06 09:56:21.
+
+        Returns None if no datetime stamp found. This is the actual meeting start
+        time and is preferred over lastModifiedDateTime (= file write completion).
+        """
+        if not filename:
+            return None
+        import re
+        m = re.search(r"-(\d{8})_(\d{4,6})-", filename)
+        if not m:
+            return None
+        date_part, time_part = m.group(1), m.group(2)
+        # time_part may be HHMM or HHMMSS — pad to 6 digits
+        time_part = time_part.ljust(6, "0")
+        try:
+            return datetime.strptime(date_part + time_part, "%Y%m%d%H%M%S")
+        except ValueError:
+            return None
+
+    def _fetch_calendar_event(self, organizer_email: str, filename_subject: str,
+                              meeting_start: datetime | None) -> dict | None:
+        """Find calendar event for a recording — fuzzy subject + closest-time tiebreak.
+
+        Strategy (in order):
+          1. Query calendar +/- 6h around meeting_start.
+          2. Among events whose normalized subject equals the filename's normalized
+             subject, pick the one closest in time to meeting_start.
+          3. If no subject match but the window has exactly one event, use it
+             (date-only fallback — common for ad-hoc calls and renamed meetings).
+          4. Otherwise return None.
+
+        Returns {"subject": <original calendar subject>, "attendees": [emails]}.
+        The calendar's original subject preserves chars the filename had to drop
+        (`:`, `/`, `\\`, `?`, `*`, `"`, `<`, `>`, `|`) so downstream access checks
+        match what users see in their Outlook calendar.
+        """
+        if not filename_subject or not meeting_start:
+            return None
 
         try:
-            # Search within +/- 1 day of the recording date
-            start_dt = (meeting_start - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
-            end_dt = (meeting_start + timedelta(days=1)).strftime("%Y-%m-%dT23:59:59Z")
-
-            # URL-encode the subject for the filter (escape single quotes)
-            safe_subject = subject.replace("'", "''")
+            # Narrow window: +/- 6h. Wider than meeting duration (covers reschedules
+            # and time-zone drift) but tight enough to disambiguate weekly recurring
+            # meetings that share a subject.
+            start_dt = (meeting_start - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_dt = (meeting_start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
             params = urllib.parse.urlencode({
-                "$filter": f"subject eq '{safe_subject}' and start/dateTime ge '{start_dt}' and start/dateTime le '{end_dt}'",
-                "$select": "subject,attendees,organizer",
-                "$top": "5",
+                "startDateTime": start_dt,
+                "endDateTime": end_dt,
+                "$select": "subject,attendees,organizer,start,isOnlineMeeting",
+                "$top": "100",
+                "$orderby": "start/dateTime",
             })
-            url = f"{GRAPH_BASE}/users/{organizer_email}/calendar/events?{params}"
+            url = f"{GRAPH_BASE}/users/{organizer_email}/calendarView?{params}"
             data = self._graph_get(url)
-
             events = data.get("value", [])
-            if not events:
-                logger.debug("No calendar event found for '%s' (%s)", subject, organizer_email)
-                return []
 
-            # Use first matching event
-            event = events[0]
-            attendee_emails = []
-            for att in event.get("attendees", []):
-                email_addr = att.get("emailAddress", {}).get("address", "").strip().lower()
-                if email_addr:
-                    attendee_emails.append(email_addr)
+            target = self._normalize_for_match(filename_subject)
 
-            # Always include organizer as attendee (they were invited to their own meeting)
-            org_lower = organizer_email.lower()
-            if org_lower not in attendee_emails:
-                attendee_emails.append(org_lower)
+            # Pre-parse event start times (for closest-time tiebreak)
+            scored = []
+            for ev in events:
+                ev_start = self._parse_datetime(ev.get("start", {}).get("dateTime", ""))
+                if not ev_start:
+                    continue
+                delta = abs((ev_start - meeting_start).total_seconds())
+                scored.append((delta, ev))
+            scored.sort(key=lambda x: x[0])
 
-            logger.info("Found %d attendee(s) for '%s'", len(attendee_emails), subject)
-            return attendee_emails
+            # 1. Subject match (closest-time wins among equals)
+            for _, ev in scored:
+                if self._normalize_for_match(ev.get("subject", "")) == target:
+                    return self._calendar_event_to_dict(ev, organizer_email,
+                                                       filename_subject, source="subject")
+
+            # 2. Date-only fallback: exactly one event in window
+            if len(scored) == 1:
+                ev = scored[0][1]
+                logger.info("Calendar fallback (date-only, single event in window): '%s' → '%s'",
+                            filename_subject, ev.get("subject"))
+                return self._calendar_event_to_dict(ev, organizer_email,
+                                                   filename_subject, source="single-in-window")
+
+            logger.debug("No calendar event matched '%s' for %s (%d events in window)",
+                         filename_subject, organizer_email, len(events))
+            return None
 
         except Exception as e:
-            logger.warning("Failed to fetch attendees for '%s': %s", subject, e)
-            return []
+            logger.warning("Calendar lookup failed for '%s' (%s): %s",
+                           filename_subject, organizer_email, e)
+            return None
+
+    @staticmethod
+    def _calendar_event_to_dict(event: dict, organizer_email: str,
+                                filename_subject: str, source: str) -> dict:
+        real_subject = (event.get("subject") or "").strip()
+        attendee_emails = []
+        for att in event.get("attendees", []):
+            addr = att.get("emailAddress", {}).get("address", "").strip().lower()
+            if addr:
+                attendee_emails.append(addr)
+        org_lower = organizer_email.lower()
+        if org_lower not in attendee_emails:
+            attendee_emails.append(org_lower)
+        logger.info("Calendar match (%s) for '%s' → '%s' (%d attendees)",
+                    source, filename_subject, real_subject, len(attendee_emails))
+        return {"subject": real_subject, "attendees": attendee_emails}
 
     def get_user_calendar_subjects(self, email: str, days: int = 30) -> list[dict]:
         """Get online meeting subjects from user's calendar for the last N days.

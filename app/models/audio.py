@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime, timezone, timedelta
 
-from sqlalchemy import Integer, String, Float, Text, Enum, DateTime
+from sqlalchemy import Integer, String, Float, Text, Enum, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -18,6 +18,9 @@ class AudioFile(Base):
     __tablename__ = "audio_files"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    tenant_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("organizations.id"), nullable=False, index=True, server_default="1"
+    )
     original_filename: Mapped[str] = mapped_column(String(255))
     stored_filename: Mapped[str] = mapped_column(String(255), unique=True)
     file_path: Mapped[str] = mapped_column(String(500))

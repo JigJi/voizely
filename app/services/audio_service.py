@@ -47,7 +47,7 @@ def get_audio_duration(file_path: str) -> float | None:
     return None
 
 
-async def save_upload(file: UploadFile, db: Session) -> AudioFile:
+async def save_upload(file: UploadFile, db: Session, tenant_id: int = 1) -> AudioFile:
     ext = Path(file.filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise ValueError(f"Unsupported file type: {ext}")
@@ -61,6 +61,7 @@ async def save_upload(file: UploadFile, db: Session) -> AudioFile:
     duration = get_audio_duration(str(file_path))
 
     audio = AudioFile(
+        tenant_id=tenant_id,
         original_filename=file.filename,
         stored_filename=stored_filename,
         file_path=str(file_path),
