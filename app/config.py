@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./speech_to_text.db"
     PG_DB: str = "speech_text"
     PG_USER: str = "postgres"
-    PG_PASS: str = "P@ssw0rd"
+    PG_PASS: str = ""  # set in .env — no default so public repo leaks nothing
     PG_HOST: str = "localhost"
     PG_PORT: int = 5432
     UPLOAD_DIR: str = "./uploads"
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     MS_TEAMS_DEFAULT_LANGUAGE: str = "th"
 
     # Auth
-    SECRET_KEY: str = "d94328f901d98ced4782f2064204ed9db848c8d247b268a678ddb682886f193e"
+    SECRET_KEY: str = ""  # REQUIRED in .env — must be a random hex, never committed
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 1440  # 24 hours
     AD_ENABLED: bool = False
