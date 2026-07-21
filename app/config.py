@@ -27,7 +27,6 @@ class Settings(BaseSettings):
     OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
     LLM_TIMEOUT: int = 300
     HF_TOKEN: str = ""
-    GEMINI_API_KEY: str = ""
     DEEPGRAM_API_KEY: str = ""
     ASSEMBLYAI_API_KEY: str = ""
 
